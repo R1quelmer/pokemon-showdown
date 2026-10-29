@@ -24,13 +24,59 @@ export interface Storage {
 	put(replay: Replay): Promise<void>;
 	get(id: string): Promise<Replay | null>;
 }
+// SDK error strings/messages are untrusted: emit only fixed, recognized identifiers.
+const ERROR_NAMES = new Set([
+	'Error', 'TypeError', 'EndpointError', 'CredentialsProviderError', 'InvalidAccessKeyId',
+	'AccessDenied', 'SignatureDoesNotMatch', 'NoSuchBucket', 'NoSuchKey', 'InvalidArgument',
+	'InvalidRequest', 'NotImplemented', 'ServiceUnavailable', 'InternalError', 'SlowDown',
+	'RequestTimeout', 'RequestTimeTooSkewed', 'TimeoutError', 'NetworkingError', 'AbortError',
+	'ReplayConfigurationError', 'PermanentRedirect', 'AuthorizationHeaderMalformed',
+	'InvalidDigest', 'BadDigest', 'XAmzContentSHA256Mismatch', 'InvalidBucketName', 'S3ServiceException',
+	'UnknownError', 'ERR_INVALID_URL', 'ERR_INVALID_CHAR',
+]);
+const NETWORK_CODES = new Set([
+	'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN',
+	'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH', 'ERR_TLS_CERT_ALTNAME_INVALID',
+	'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+]);
+type ReplayStage = 'PrepareReplay' | 'ConfigureR2' | 'PutObject' | 'AnnounceReplay' | 'GetObject';
+export function replayFailure(stage: ReplayStage, error: unknown) {
+	const read = (value: unknown, key: string): unknown => {
+		try {
+			return value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+		} catch {
+			return undefined;
+		}
+	};
+	const identifier = (value: unknown) => typeof value === 'string' &&
+		(ERROR_NAMES.has(value) || NETWORK_CODES.has(value)) ? value : 'UnrecognizedError';
+	const status = (value: unknown) => typeof value === 'number' && Number.isInteger(value) &&
+		value >= 100 && value <= 599 ? value : undefined;
+	const name = identifier(read(error, 'name'));
+	const code = identifier(read(error, 'code') ?? read(error, 'Code'));
+	const causeCode = identifier(read(read(error, 'cause'), 'code'));
+	const timeout = [name, code, causeCode].some(value => /Timeout|TIMEDOUT/.test(value));
+	const connection = [name, code, causeCode].some(value => NETWORK_CODES.has(value));
+	return {
+		stage, name, code, causeCode, timeout, connection,
+		httpStatusCode: status(read(error, 'statusCode')),
+		metadataHttpStatusCode: status(read(read(error, '$metadata'), 'httpStatusCode')),
+	};
+}
+function reportFailure(stage: ReplayStage, error: unknown) {
+	console.warn(`Copa Rinha: falha no replay. ${JSON.stringify(replayFailure(stage, error))}`);
+}
 let storage: Storage | undefined;
 export function r2Storage(): Storage {
 	if (storage) return storage;
 	const {
 		R2_BUCKET: bucket, R2_ENDPOINT: endpoint, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey,
 	} = process.env;
-	if (!bucket || !endpoint || !accessKeyId || !secretAccessKey) throw new Error('Replay storage unavailable');
+	if (!bucket || !endpoint || !accessKeyId || !secretAccessKey) {
+		const error = new Error('Replay storage unavailable');
+		error.name = 'ReplayConfigurationError';
+		throw error;
+	}
 	const client = new S3Client({
 		region: 'auto', endpoint, credentials: { accessKeyId, secretAccessKey }, maxAttempts: 2,
 		requestHandler: { connectionTimeout: 5000, requestTimeout: 15000 },
@@ -47,6 +93,7 @@ export function r2Storage(): Storage {
 				return JSON.parse(await result.Body!.transformToString());
 			} catch (error: any) {
 				if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return null;
+				reportFailure('GetObject', error);
 				throw new Error('Replay storage unavailable');
 			}
 		},
@@ -66,6 +113,7 @@ export interface CompletedBattle {
 }
 export async function saveBattle(battle: CompletedBattle, winner: string, store?: Storage): Promise<Replay | null> {
 	if (battle.format !== FORMAT) return null;
+	let stage: ReplayStage = 'PrepareReplay';
 	try {
 		const log = cleanLog(battle.room.getLog(-1));
 		const turns = [...log.matchAll(/^\|turn\|(\d+)$/gm)].map(match => Number(match[1]));
@@ -75,13 +123,16 @@ export async function saveBattle(battle: CompletedBattle, winner: string, store?
 			winner, winnerid: userid(winner), turns: Math.max(0, ...turns),
 			endType: !winner ? 'tie' : battle.endType, log,
 		};
-		await (store || r2Storage()).put(replay);
+		stage = 'ConfigureR2';
+		const target = store || r2Storage();
+		stage = 'PutObject';
+		await target.put(replay);
+		stage = 'AnnounceReplay';
 		const url = `${CLIENT}/replay.html?id=${replay.id}`;
 		battle.room.add(`|raw|<div class="infobox">Replay da Copa Rinha salvo — <a href="${url}" target="_blank" rel="noopener">Assistir replay</a> · <copytext value="${url}">Copiar link</copytext></div>`).update();
 		return replay;
-	} catch {
-		// Never log SDK errors: they may contain signed requests or credentials.
-		console.warn('Copa Rinha: não foi possível salvar o replay.');
+	} catch (error) {
+		reportFailure(stage, error);
 		return null;
 	}
 }

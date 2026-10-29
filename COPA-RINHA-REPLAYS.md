@@ -34,3 +34,24 @@ Não foram fornecidas credenciais R2 neste ambiente: nenhum acesso real ao bucke
 foi testado. Para QA real, termine uma partida do formato alvo no site, aguarde
 o anúncio e abra o link em outra sessão. Confira o objeto no painel privado R2,
 a resposta JSON e a reprodução. Repita com forfeit/empate e outro formato.
+
+## Diagnóstico seguro de falhas no Render
+
+Falhas agora registram uma linha `Copa Rinha: falha no replay.` seguida de JSON
+com etapa, identificadores conhecidos do erro, status HTTP numérico (incluindo
+`metadataHttpStatusCode` do SDK) e indicadores de timeout/conexão. Identificadores
+desconhecidos viram `UnrecognizedError`. Mensagem, stack, request, headers, URLs e
+variáveis de ambiente nunca são incluídos. Etapas: PrepareReplay, ConfigureR2,
+PutObject, AnnounceReplay e GetObject. ReplayConfigurationError indica configuração
+incompleta no processo que tentou salvar, sem identificar valores.
+
+A revisão e o teste do SDK com transporte mockado confirmaram PUT via HTTPS,
+região de assinatura `auto`, bucket no hostname (virtual-hosted addressing padrão)
+e objeto no caminho `/replays/<id>.json`. Não foi demonstrado um defeito nessa
+configuração; ela permanece inalterada. Esse teste não verifica credenciais,
+permissões nem conectividade com R2 real. A causa da falha observada no Render
+precisa de uma nova partida com este diagnóstico para obter o código/status real.
+
+Após deploy deste commit somente no servidor, mantenha as variáveis existentes,
+termine uma nova batalha do formato alvo e confira o anúncio e o bucket. Em caso
+de falha, copie apenas a nova linha de diagnóstico seguro dos logs do serviço.
