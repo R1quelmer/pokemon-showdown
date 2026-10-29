@@ -11,6 +11,7 @@
  * @license MIT
  */
 
+import { saveBattle } from './copa-replays';
 import { execSync } from "child_process";
 import { ProcessManager, type Streams } from '../lib';
 import { BattleStream } from "../sim/battle-stream";
@@ -842,6 +843,7 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	end(winnerName: unknown) {
 		if (this.ended) return;
 		this.setEnded();
+		void saveBattle(this, typeof winnerName === 'string' ? winnerName : '');
 		// Declare variables here in case we need them for non-rated battles logging.
 		let p1score = 0.5;
 		const winnerid = toID(winnerName);

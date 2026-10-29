@@ -11,6 +11,7 @@
  * @license MIT
  */
 
+import { handleReplayRequest } from './copa-replays';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
@@ -345,6 +346,7 @@ export class ServerStream extends Streams.ObjectReadWriteStream<string> {
 				// console.log(`static rq: ${req.socket.remoteAddress}:${req.socket.remotePort} -> ${req.socket.localAddress}:${req.socket.localPort} - ${req.method} ${req.url} ${req.httpVersion} - ${req.rawHeaders.join('|')}`);
 				req.resume();
 				req.addListener('end', () => {
+					if (handleReplayRequest(req, res)) return;
 					if (config.customhttpresponse?.(req, res)) {
 						return;
 					}
