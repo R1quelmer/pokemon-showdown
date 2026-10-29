@@ -6,7 +6,7 @@ const { TeamValidator, Dex } = require('../../../dist/sim');
 
 describe('Copa Rinha National Dex ZA', () => {
 	let battle;
-	const formatid = 'coparinhanationaldexza';
+	const formatid = 'gen9coparinhanationaldexza';
 	const charizard = { species: 'Charizard', item: 'charizarditex', moves: ['sleeptalk'], teraType: 'Water' };
 	const mew = { species: 'Mew', item: 'normaliumz', moves: ['splash'], teraType: 'Water' };
 	const venusaur = { species: 'Venusaur', item: 'venusaurite', moves: ['sleeptalk'], teraType: 'Water' };
@@ -27,6 +27,27 @@ describe('Copa Rinha National Dex ZA', () => {
 	afterEach(() => {
 		battle?.destroy();
 		battle = null;
+	});
+
+	it('advertises a canonical Gen 9 ID while retaining the Copa Rinha mod and rules', () => {
+		const format = Dex.formats.get(formatid);
+		assert.equal(format.id, formatid);
+		assert.equal(format.name, '[Gen 9] [Copa Rinha] National Dex ZA');
+		assert.equal(format.mod, 'coparinha');
+		assert.equal(Dex.mod(format.mod).gen, 9);
+		assert.deepEqual(format.ruleset, ['Standard AG', 'NatDex Mod', 'Copa Rinha Mechanics']);
+	});
+
+	it('validates the editor test team with past Pokemon, Gen 8 and Gen 9 species', () => {
+		const validator = new TeamValidator(formatid);
+		assert.equal(validator.validateTeam([
+			{ species: 'Lucario', ability: 'Inner Focus', item: 'Lucarionite', moves: ['Aura Sphere'], evs: { hp: 252 } },
+			{ species: 'Greninja', ability: 'Torrent', moves: ['Surf'], evs: { hp: 252 } },
+			{ species: 'Venusaur', ability: 'Overgrow', item: 'Venusaurite', moves: ['Giga Drain'], evs: { hp: 252 } },
+			{ species: 'Pikachu', ability: 'Static', item: 'Pikanium Z', gigantamax: true, moves: ['Volt Tackle'], evs: { hp: 252 } },
+			{ species: 'Dragapult', ability: 'Clear Body', moves: ['Shadow Ball'], evs: { hp: 252 } },
+			{ species: 'Miraidon', ability: 'Hadron Engine', moves: ['Electro Drift'], evs: { hp: 252 } },
+		]), null);
 	});
 
 	it('offers Mega, Dynamax and Tera together with a Mega Stone', () => {

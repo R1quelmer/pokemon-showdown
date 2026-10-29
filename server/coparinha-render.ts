@@ -20,6 +20,8 @@ export function applyRenderConfig(
 		lazysockets: false,
 		repl: false,
 		watchconfig: false,
+		// Copa Rinha uses local nicknames, without a login server or assertions.
+		noguestsecurity: true,
 	});
 	// Legacy settings otherwise override subprocesses when the loader builds its cache.
 	delete config.workers;

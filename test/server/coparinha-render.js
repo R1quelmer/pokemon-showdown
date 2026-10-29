@@ -60,7 +60,7 @@ describe('Copa Rinha Render configuration', () => {
 		});
 	}
 
-	it('uses a single process, the public interface and Render PORT without changing security settings', () => {
+	it('uses a single process and local nicknames only in the Copa Rinha Render preset', () => {
 		const config = localConfig();
 		applyRenderConfig(config, processTypes, { RENDER: 'true', PORT: '12345' });
 		assert.equal(config.subprocesses, 0);
@@ -70,7 +70,7 @@ describe('Copa Rinha Render configuration', () => {
 		assert.equal(config.repl, false);
 		assert.equal(config.watchconfig, false);
 		assert.equal(config.lazysockets, false);
-		assert.equal(config.noguestsecurity, false);
+		assert.equal(config.noguestsecurity, true);
 		assert.equal(config.noipchecks, false);
 		assert.equal(config.nothrottle, false);
 		assert.equal(config.customsetting, 'preserved');
@@ -107,6 +107,7 @@ describe('Copa Rinha Render configuration', () => {
 		assert.equal(config.subprocesses, 0);
 		assert.equal(config.port, 10000);
 		assert.equal(config.bindaddress, '0.0.0.0');
+		assert.equal(config.noguestsecurity, true);
 		assert.deepEqual(Object.keys(config.subprocessescache).sort(), [...processTypes].sort());
 		for (const type of processTypes) assert.equal(config.subprocessescache[type], 0);
 	});
@@ -115,6 +116,7 @@ describe('Copa Rinha Render configuration', () => {
 		const config = loadConfig(localConfig(), {});
 		assert.equal(config.port, 8000);
 		assert.equal(config.bindaddress, '127.0.0.1');
+		assert.equal(config.noguestsecurity, false);
 		assert.equal(config.subprocessescache.network, 2);
 		assert.equal(config.subprocessescache.simulator, 3);
 		assert.equal(config.subprocessescache.validator, 4);

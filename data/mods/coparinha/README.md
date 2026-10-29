@@ -6,7 +6,10 @@ estão **excluídas** nesta primeira versão.
 
 ## Arquitetura e isolamento
 
-- `config/custom-formats.ts` registra o formato, ID `coparinhanationaldexza`.
+- `config/custom-formats.ts` registra `[Gen 9] [Copa Rinha] National Dex ZA`,
+  ID canônico `gen9coparinhanationaldexza`. O prefixo identifica a geração
+  corretamente no Teambuilder; o mod continua sendo `coparinha`. O cliente
+  migra os IDs antigos `coparinhanationaldexza` e `gen6coparinhanationaldexza`.
   Nenhum formato de `config/formats.ts` foi alterado. A exceção em `.gitignore`
   permite versionar esse arquivo de configuração customizada.
 - `scripts.ts` herda os dados e as mecânicas de `gen9`. Os métodos locais de
@@ -74,7 +77,7 @@ Uma sondagem adicional encontrou um defeito herdado na restauração de estado:
 Mew com `['transform', 'splash']` usa Transform em Blissey com `['splash']`;
 depois `Battle.fromJSON(JSON.stringify(battle.toJSON()))` lança `TypeError` em
 `sim/state.ts:239`, pois há menos slots transformados que slots base. O mesmo
-erro foi reproduzido em `gen9nationaldexag` e em `coparinhanationaldexza`.
+erro foi reproduzido em `gen9nationaldexag` e em `gen9coparinhanationaldexza`.
 Não é uma falha dos limites de gimmicks e não foi corrigido globalmente nesta
 tarefa, para manter o isolamento do mod. A restauração após cada uma das quatro
 gimmicks, sem esse caso de Transform, preservou o marcador nas sondagens.
@@ -94,10 +97,13 @@ menus Z e Max separadamente e rotular G-Max corretamente. O moderno já possui
 os menus e botões necessários. Ambos precisam de seleção exclusiva por ação;
 o builder moderno também aceita/serializa flags conflitantes e precisa validá-las.
 
-Nenhum código do cliente foi alterado. Essa análise é de código; não houve
-validação visual em navegador. É necessária uma tarefa no repositório do
-cliente para concluir a experiência dos botões. O servidor rejeita comandos
-incompatíveis mesmo quando o cliente permite selecionar checkboxes conflitantes.
+A implementação do cliente está no fork `R1quelmer/pokemon-showdown-client`,
+branch `feat/copa-rinha-gimmick-ui`. O documento CLIENT.md preserva a análise
+inicial do upstream. O cliente customizado oferece seleção exclusiva das
+gimmicks, migra os IDs antigos para Gen 9 e oferece entrada por nickname local
+na página Copa Rinha. Veja o README desse repositório para o acesso e deploy.
+O preset Render aceita esses nomes sem assertion; não são autenticação segura
+e outra pessoa que conheça o servidor pode usar um nome disponível.
 
 ## Desenvolvimento e validação
 
@@ -116,7 +122,7 @@ node pokemon-showdown start --skip-build 8000
 ```
 
 O formato é de desafios (`searchShow: false`). Use o ID
-`coparinhanationaldexza` nos testes/integrações. Os testes incluem o exemplo
+`gen9coparinhanationaldexza` nos testes/integrações. Os testes incluem o exemplo
 Venusaur → Dynamax, Lucario → Mega, Pikachu → Z e Garchomp → Tera para ambos os
 jogadores; G-Max com Z-Crystal; opções simultâneas; limites independentes;
 persistência após troca/fim do Dynamax; rejeição de flags conflitantes;

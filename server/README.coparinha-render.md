@@ -27,6 +27,19 @@ and config-file watcher are disabled for this deployment. Outside Render,
 the usual configuration is unchanged. The Copa Rinha format and gimmick
 rules are unchanged.
 
+This Copa Rinha Render preset enables `noguestsecurity = true`, so clients can
+choose an unregistered local nickname with `/trn NAME` and no assertion or
+password. **Local nicknames are not secure authentication: another person who
+knows the server can use a name when it is available.** Do not use these names
+as proof of identity. No password or official Showdown credentials are stored
+by this feature. Outside Render this setting is unchanged.
+
+The format is advertised as `[Gen 9] [Copa Rinha] National Dex ZA`, with the
+canonical ID `gen9coparinhanationaldexza`; it still uses `mod: 'coparinha'`.
+Redeploy the matching client branch too, so previously saved IDs
+`coparinhanationaldexza` and `gen6coparinhanationaldexza` are migrated by the
+Teambuilder. No rules or gimmick limits changed with this ID migration.
+
 `--max-old-space-size=384` caps only V8's old generation, **not** total process
 memory. The young generation, native allocations, code and buffers also count
 toward Render's 512 MB limit. A 256 MiB old-generation limit plus an 8 MiB
