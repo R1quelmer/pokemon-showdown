@@ -1,8 +1,9 @@
 # [Copa Rinha] National Dex ZA
 
-Protótipo singles de National Dex sem banimentos por tier. O sufixo ZA é o nome
-do metagame; as novas Megas de Legends Z-A já presentes no banco deste fork
-estão **excluídas** nesta primeira versão.
+Formato singles de National Dex sem banimentos por tier. As **49 formas Mega de
+Legends: Z-A implementadas no upstream** estão disponíveis, incluindo as
+variantes Mega Z e DLC. Veja [ZA.md](./ZA.md) para a lista completa, pedras,
+stats, tipos, abilities e a comparação fixada no upstream `ccfaa20f32af363569cd21a9d501b2bc1ded26b1`.
 
 ## Arquitetura e isolamento
 
@@ -15,10 +16,11 @@ estão **excluídas** nesta primeira versão.
 - `scripts.ts` herda os dados e as mecânicas de `gen9`. Os métodos locais de
   `BattleActions`, `Pokemon` e `Side` são instalados pelos pontos de extensão
   que o simulador já oferece, sem modificar os protótipos originais.
-- `rulesets.ts` inicializa a disponibilidade de Dynamax e rejeita Megas novas.
+- `rulesets.ts` inicializa a disponibilidade de Dynamax e libera as formas/pedras de Z-A de forma específica, sem liberar Future globalmente.
 - `conditions.ts` estende somente o início da condição Dynamax, reutilizando
   duração, HP, efeitos, encerramento e Gigantamax originais.
-- `test/sim/othermetas/coparinha.js` testa o formato real, suas requests e ações.
+- `test/sim/othermetas/coparinha.js` testa o formato real, suas requests e ações;
+  `coparinha-za.js` cobre as Megas de Z-A e seus dados upstream.
 - `config/hosts.csv` identifica toda a faixa de loopback `127.0.0.0/8` como
   `localhost`, estendendo a entrada que cobria apenas `127.0.0.1`. Isso evita
   consultas PTR externas para os IPs de loopback dos testes de punições. Não
@@ -38,7 +40,7 @@ para os demais cálculos. Não simula Gen 8 para habilitar Dynamax.
 
 O validador verifica elegibilidade G-Max na forma Mega prospectiva ao avaliar
 uma Mega Stone. O `init` copia a elegibilidade da espécie base para os dados
-locais das Megas antigas correspondentes. Isso só permite validar a escolha
+locais das Megas correspondentes. Isso só permite validar a escolha
 dinâmica do set: uma Mega já ativada continua impedida de usar Dynamax.
 
 ## Regras e estado
@@ -126,7 +128,7 @@ O formato é de desafios (`searchShow: false`). Use o ID
 Venusaur → Dynamax, Lucario → Mega, Pikachu → Z e Garchomp → Tera para ambos os
 jogadores; G-Max com Z-Crystal; opções simultâneas; limites independentes;
 persistência após troca/fim do Dynamax; rejeição de flags conflitantes;
-legalidade National Dex; exclusão das novas Megas e isolamento do formato oficial.
+legalidade National Dex; Megas de Z-A e isolamento do formato oficial.
 
 Casos específicos cobertos por testes automatizados:
 
@@ -141,9 +143,9 @@ Casos específicos cobertos por testes automatizados:
 | Quatro mecânicas na mesma batalha, em Pokémon diferentes | Venusaur/Lucario/Pikachu/Garchomp executam as quatro para ambos os jogadores |
 | Limite de uma ativação de cada mecânica por jogador | Segundo Pokémon ainda sem marcador tenta repetir cada mecânica e é rejeitado |
 | Dynamax e G-Max compartilham a mesma utilização | Tentativas nas duas ordens são rejeitadas após o primeiro uso |
-| Z-A continua fora do protótipo | Clefable comum é legal; Clefablite produz a mensagem específica de exclusão de Z-A |
+| Z-A disponível | As formas e pedras são liberadas somente na Copa Rinha; Clefable com Clefablite é legal |
 
-Revalidação: build, TypeScript, `test-npm` e lint com zero avisos aprovados;
+Histórico de validação do protótipo anterior (antes da liberação de Z-A): build, TypeScript, `test-npm` e lint com zero avisos aprovados;
 25 testes específicos da Copa Rinha aprovados. A primeira execução de
 `npm run full-test` teve 2770 aprovados, 73 pendentes e seis timeouts em testes
 de rede, com prazo de 8 segundos. A repetição dos testes de rede com prazo de
@@ -166,7 +168,6 @@ endpoint SockJS de informações e anunciou o formato pela conexão WebSocket.
 O validador também aceitou a equipe Venusaurite, Lucarionite, Pikachu com
 Pikanium Z e G-Max, Garchomp e Arceus.
 
-Para acrescentar Megas de Z-A posteriormente, primeiro revisar os dados já
-existentes neste fork, decidir quais entram, substituir a exclusão por uma
-política explícita e testar a nova elegibilidade/forma/ability/item em cada
-caso. Isso deve ser feito separadamente, após validar este protótipo e a UI.
+As Megas de Z-A agora usam os mesmos limites de Mega das antigas: várias
+pedras são aceitas por equipe, mas somente um Pokémon pode efetivamente Mega
+Evoluir por jogador. O inventário e os dados de referência estão em [ZA.md](./ZA.md).

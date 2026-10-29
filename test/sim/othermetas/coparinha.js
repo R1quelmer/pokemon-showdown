@@ -289,13 +289,12 @@ describe('Copa Rinha National Dex ZA', () => {
 		assert(illegalMove?.some(problem => problem.includes("can't learn Judgment")));
 	});
 
-	it('rejects ZA Mega Stones explicitly rather than failing an unrelated EV check', () => {
+	it('allows implemented ZA Mega Stones while preserving ordinary move legality', () => {
 		const validator = new TeamValidator(formatid);
 		const clefable = { species: 'Clefable', ability: 'Magic Guard', moves: ['Moonblast'], evs: { hp: 252 } };
 		assert.equal(validator.validateTeam([{ ...clefable }]), null);
-		const problems = validator.validateTeam([{ ...clefable, item: 'Clefablite' }]);
-		assert(problems?.includes('Megas de Legends Z-A não fazem parte deste protótipo.'));
-		assert(!problems.some(problem => problem.includes('EVs')));
+		assert.equal(validator.validateTeam([{ ...clefable, item: 'Clefablite' }]), null);
+		assert(validator.validateTeam([{ ...clefable, item: 'Clefablite', moves: ['Judgment'] }])?.length);
 	});
 
 	it('leaves official National Dex mechanics unchanged', () => {

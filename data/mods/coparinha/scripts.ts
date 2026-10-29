@@ -16,7 +16,7 @@ export const Scripts: ModdedBattleScriptsData = {
 		// Validation checks the prospective Mega forme for the G-Max flag. Retain
 		// the base species' eligibility so a stone does not invalidate the set.
 		for (const [id, species] of Object.entries(this.data.Pokedex)) {
-			if (!species.forme?.includes('Mega') || (species.gen || 0) >= 9) continue;
+			if (!species.forme?.includes('Mega')) continue;
 			const gmax = this.data.Pokedex[this.toID(species.baseSpecies)].canGigantamax;
 			if (gmax) this.modData('Pokedex', id).canGigantamax = gmax;
 		}
@@ -40,8 +40,7 @@ export const Scripts: ModdedBattleScriptsData = {
 	actions: {
 		canMegaEvo(pokemon) {
 			if (pokemon.m.copaRinhaMechanic) return null;
-			const mega = BattleActions.prototype.canMegaEvo.call(this, pokemon);
-			return mega && this.dex.species.get(mega).gen < 9 ? mega : null;
+			return BattleActions.prototype.canMegaEvo.call(this, pokemon);
 		},
 		canTerastallize(pokemon) {
 			return pokemon.m.copaRinhaMechanic ? null : pokemon.teraType;
