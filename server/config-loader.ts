@@ -9,6 +9,7 @@ import * as defaults from '../config/config-example';
 import type { GroupInfo, EffectiveGroupSymbol } from './user-groups';
 import type { LogLevel, LogEntry } from './monitor';
 import { ProcessManager, FS } from '../lib';
+import { applyRenderConfig } from './coparinha-render';
 
 type DefaultConfig = typeof defaults;
 
@@ -53,6 +54,7 @@ export function load(invalidate = false) {
 	const config = ({ ...defaults, ...require(CONFIG_PATH) }) as ConfigType;
 	// config.routes is nested - we need to ensure values are set for its keys as well.
 	config.routes = { ...defaults.routes, ...config.routes };
+	applyRenderConfig(config, processTypes);
 
 	if (!process.send) {
 		// Automatically stop startup if optional dependencies are enabled yet missing
