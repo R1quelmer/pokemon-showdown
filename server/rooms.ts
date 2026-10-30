@@ -28,6 +28,7 @@ const LAST_BATTLE_WRITE_THROTTLE = 10;
 
 const RETRY_AFTER_LOGIN = null;
 
+import { playerFormatAllowed, COPA_ONLY_MESSAGE } from './copa-format-policy';
 import { FS, Utils, Streams } from '../lib';
 import { type RoomSection, RoomSections } from './chat-commands/room-settings';
 import { type QueuedHunt } from './chat-plugins/scavengers';
@@ -1484,6 +1485,7 @@ export class GlobalRoomState {
 			if (format.section) section = format.section;
 			if (format.column) curColumn = format.column;
 			if (!format.name) continue;
+			if (!playerFormatAllowed(format.id)) continue;
 			if (!format.challengeShow && !format.searchShow && !format.tournamentShow) continue;
 
 			if (section !== prevSection) {
@@ -2202,7 +2204,12 @@ export const Rooms = {
 	 */
 	createBattle(options: RoomBattleOptions & Partial<RoomSettings>) {
 		const players = options.players.map(player => player.user);
+		if (!playerFormatAllowed(options.format)) {
+			for (const user of players) user.popup(COPA_ONLY_MESSAGE);
+			return null;
+		}
 		const format = Dex.formats.get(options.format);
+		if (Config.copaRinhaSingleFormat) options.format = format.id;
 		if (players.length > format.playerCount) {
 			throw new Error(`${players.length} players were provided, but the format is a ${format.playerCount}-player format.`);
 		}

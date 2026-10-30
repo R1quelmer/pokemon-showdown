@@ -71,6 +71,7 @@ describe('Copa Rinha Render configuration', () => {
 		assert.equal(config.watchconfig, false);
 		assert.equal(config.lazysockets, false);
 		assert.equal(config.noguestsecurity, true);
+		assert.equal(config.copaRinhaSingleFormat, true);
 		assert.equal(config.noipchecks, false);
 		assert.equal(config.nothrottle, false);
 		assert.equal(config.customsetting, 'preserved');
@@ -108,6 +109,7 @@ describe('Copa Rinha Render configuration', () => {
 		assert.equal(config.port, 10000);
 		assert.equal(config.bindaddress, '0.0.0.0');
 		assert.equal(config.noguestsecurity, true);
+		assert.equal(config.copaRinhaSingleFormat, true);
 		assert.deepEqual(Object.keys(config.subprocessescache).sort(), [...processTypes].sort());
 		for (const type of processTypes) assert.equal(config.subprocessescache[type], 0);
 	});

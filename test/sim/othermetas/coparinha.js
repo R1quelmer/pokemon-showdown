@@ -32,7 +32,7 @@ describe('Copa Rinha National Dex ZA', () => {
 	it('advertises a canonical Gen 9 ID while retaining the Copa Rinha mod and rules', () => {
 		const format = Dex.formats.get(formatid);
 		assert.equal(format.id, formatid);
-		assert.equal(format.name, '[Gen 9] [Copa Rinha] National Dex ZA');
+		assert.equal(format.name, 'Copa Rinha II');
 		assert.equal(format.mod, 'coparinha');
 		assert.equal(Dex.mod(format.mod).gen, 9);
 		assert.deepEqual(format.ruleset, ['Standard AG', 'NatDex Mod', 'Copa Rinha Mechanics']);

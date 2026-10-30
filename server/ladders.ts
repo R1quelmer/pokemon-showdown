@@ -8,6 +8,7 @@
  * @license MIT
  */
 
+import { playerFormatAllowed, COPA_ONLY_MESSAGE } from './copa-format-policy';
 import { LadderStore as RemoteLadderStore } from './ladders-remote';
 import { LadderStore as LocalLadderStore } from './ladders-local';
 
@@ -72,6 +73,10 @@ class Ladder extends LadderStore {
 		const userid = user.id;
 		if (team === null) team = user.battleSettings.team;
 
+		if (!playerFormatAllowed(this.formatid)) {
+			connection.popup(COPA_ONLY_MESSAGE);
+			return null;
+		}
 		if (Rooms.global.lockdown && Rooms.global.lockdown !== 'pre') {
 			let message = `The server is restarting. Battles will be available again in a few minutes.`;
 			if (Rooms.global.lockdown === 'ddos') {

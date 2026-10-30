@@ -518,6 +518,7 @@ export class Format extends BasicEffect implements Readonly<BasicEffect> {
 
 	constructor(data: AnyObject) {
 		super(data);
+		if (data.id) this.id = toID(data.id);
 
 		this.mod = Utils.getString(data.mod) || 'gen9';
 		this.effectType = Utils.getString(data.effectType) as FormatEffectType || 'Condition';
@@ -632,7 +633,7 @@ export class DexFormats {
 		let section = '';
 		let column = 1;
 		for (const [i, format] of Formats.entries()) {
-			const id = toID(format.name);
+			const id = toID(format.id || format.name);
 			if (format.section) section = format.section;
 			if (format.column) column = format.column;
 			if (!format.name && format.section) continue;
@@ -657,6 +658,7 @@ export class DexFormats {
 
 			const ruleset = new Format(format);
 			this.rulesetCache.set(id, ruleset);
+			if (id !== toID(format.name)) this.rulesetCache.set(toID(format.name), ruleset);
 			formatsList.push(ruleset);
 		}
 
@@ -743,6 +745,11 @@ export class DexFormats {
 		if (this.dex.getAlias(id)) {
 			id = this.dex.getAlias(id)!;
 			name = id;
+		}
+		// getAlias may load data/formats on the first lookup, including explicit-name aliases.
+		if (!name.includes('@@@')) {
+			const cached = this.rulesetCache.get(id);
+			if (cached) return cached;
 		}
 		if (this.dex.data.Rulesets.hasOwnProperty(DEFAULT_MOD + id)) {
 			id = (DEFAULT_MOD + id) as ID;

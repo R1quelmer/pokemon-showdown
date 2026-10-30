@@ -774,3 +774,6 @@ exports.grouplist = [
 		punishgroup: 'MUTE',
 	},
 ];
+
+// Restrict public player battles to Copa Rinha; simulator/validator remain unrestricted.
+exports.copaRinhaSingleFormat = false;

@@ -22,6 +22,7 @@ export function applyRenderConfig(
 		watchconfig: false,
 		// Copa Rinha uses local nicknames, without a login server or assertions.
 		noguestsecurity: true,
+		copaRinhaSingleFormat: true,
 	});
 	// Legacy settings otherwise override subprocesses when the loader builds its cache.
 	delete config.workers;
