@@ -1,0 +1,140 @@
+	parseFormats(formatsList: string[]) {
+		let isSection = false;
+		let section = '';
+
+		let column = 0;
+
+		window.NonBattleGames = { rps: 'Rock Paper Scissors' };
+		for (let i = 3; i <= 9; i += 2) {
+			window.NonBattleGames[`bestof${i}`] = `Best-of-${i}`;
+		}
+		window.BattleFormats = {};
+		for (let j = 1; j < formatsList.length; j++) {
+			const entry = formatsList[j];
+			if (isSection) {
+				section = entry;
+				isSection = false;
+			} else if (entry === ',LL') {
+				PS.teams.usesLocalLadder = true;
+			} else if (entry === '' || (entry.startsWith(',') && !isNaN(Number(entry.slice(1))))) {
+				isSection = true;
+
+				if (entry) {
+					column = parseInt(entry.slice(1), 10) || 0;
+				}
+			} else {
+				let name = entry;
+				let searchShow = true;
+				let challengeShow = true;
+				let tournamentShow = true;
+				let partner = false;
+				let bestOfDefault = false;
+				let teraPreviewDefault = false;
+				let itemClauseDefault = false;
+				let team: 'preset' | null = null;
+				let teambuilderLevel: number | null = null;
+				let lastCommaIndex = name.lastIndexOf(',');
+				let code = lastCommaIndex >= 0 ? parseInt(name.substr(lastCommaIndex + 1), 16) : NaN;
+				if (!isNaN(code)) {
+					name = name.substr(0, lastCommaIndex);
+					if (code & 1) team = 'preset';
+					if (!(code & 2)) searchShow = false;
+					if (!(code & 4)) challengeShow = false;
+					if (!(code & 8)) tournamentShow = false;
+					if (code & 16) teambuilderLevel = 50;
+					if (code & 32) partner = true;
+					if (code & 64) bestOfDefault = true;
+					if (code & 128) teraPreviewDefault = true;
+					if (code & 256) itemClauseDefault = true;
+				} else {
+					// Backwards compatibility: late 0.9.0 -> 0.10.0
+					if (name.substr(name.length - 2) === ',#') { // preset teams
+						team = 'preset';
+						name = name.substr(0, name.length - 2);
+					}
+					if (name.substr(name.length - 2) === ',,') { // search-only
+						challengeShow = false;
+						name = name.substr(0, name.length - 2);
+					} else if (name.substr(name.length - 1) === ',') { // challenge-only
+						searchShow = false;
+						name = name.substr(0, name.length - 1);
+					}
+				}
+				let id = toID(name);
+				let isTeambuilderFormat = !team && !name.endsWith('Custom Game');
+				let teambuilderFormat = '' as ID;
+				let teambuilderFormatName = '';
+				if (isTeambuilderFormat) {
+					teambuilderFormatName = name;
+					if (!id.startsWith('gen')) {
+						teambuilderFormatName = '[Gen 6] ' + name;
+					}
+					let parenPos = teambuilderFormatName.indexOf('(');
+					if (parenPos > 0 && name.endsWith(')')) {
+						// variation of existing tier
+						teambuilderFormatName = teambuilderFormatName.slice(0, parenPos).trim();
+					}
+					if (teambuilderFormatName !== name) {
+						teambuilderFormat = toID(teambuilderFormatName);
+						if (BattleFormats[teambuilderFormat]) {
+							BattleFormats[teambuilderFormat].isTeambuilderFormat = true;
+						} else {
+							BattleFormats[teambuilderFormat] = {
+								id: teambuilderFormat,
+								name: teambuilderFormatName,
+								team,
+								section,
+								column,
+								rated: false,
+								isTeambuilderFormat: true,
+								effectType: 'Format',
+							};
+						}
+						isTeambuilderFormat = false;
+					}
+				}
+				if (BattleFormats[id]?.isTeambuilderFormat) {
+					isTeambuilderFormat = true;
+				}
+				// make sure formats aren't out-of-order
+				if (BattleFormats[id]) delete BattleFormats[id];
+				BattleFormats[id] = {
+					id,
+					name,
+					team,
+					section,
+					column,
+					searchShow,
+					challengeShow,
+					tournamentShow,
+					bestOfDefault,
+					teraPreviewDefault,
+					itemClauseDefault,
+					rated: searchShow && id.substr(4, 7) !== 'unrated',
+					teambuilderLevel,
+					partner,
+					teambuilderFormat,
+					isTeambuilderFormat,
+					effectType: 'Format',
+				};
+			}
+		}
+
+		// Match base formats to their variants, if they are unavailable in the server.
+		let multivariantFormats: { [id: string]: 1 } = {};
+		for (let id in BattleFormats) {
+			let teambuilderFormat = BattleFormats[BattleFormats[id].teambuilderFormat!];
+			if (!teambuilderFormat || multivariantFormats[teambuilderFormat.id]) continue;
+			if (!teambuilderFormat.searchShow && !teambuilderFormat.challengeShow && !teambuilderFormat.tournamentShow) {
+				// The base format is not available.
+				if (teambuilderFormat.battleFormat) {
+					multivariantFormats[teambuilderFormat.id] = 1;
+					teambuilderFormat.battleFormat = '';
+				} else {
+					teambuilderFormat.battleFormat = id;
+				}
+			}
+		}
+		window.BattleFormats = Dex.formats.load(BattleFormats);
+		PS.teams.update('format');
+	}

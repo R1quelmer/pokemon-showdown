@@ -22,7 +22,7 @@ describe('Copa Rinha public single-format policy', () => {
 	it('advertises only Copa Rinha II with search and challenge available', () => {
 		Rooms.global.formatList = '';
 		const formats = Rooms.global.formatListText;
-		assert(formats.includes('|Copa Rinha II,e'));
+		assert(formats.includes('|[Gen 9] Copa Rinha II,e'));
 		assert(!formats.includes('Random Battle')); assert(!formats.includes('[Gen 9] OU'));
 	});
 	for (const format of ['gen9ou', 'gen9randombattle', 'gen9customgame', 'unknowncustom', COPA_FORMAT + '@@@+Pikachu']) {
@@ -48,7 +48,7 @@ describe('Copa Rinha public single-format policy', () => {
 			for (const type of ['search', 'challenge']) {
 				const messages = [];
 				user.connections[0].popup = msg => messages.push(msg);
-				const ready = await Ladders(COPA_FORMAT).prepBattle(user.connections[0], type, team);
+				const ready = await Ladders('gen9coparinhaii').prepBattle(user.connections[0], type, team);
 				assert(ready, messages.join('\n')); assert.equal(ready.formatid, COPA_FORMAT);
 			}
 		} finally { user.disconnectAll(); user.destroy(); }
@@ -57,7 +57,7 @@ describe('Copa Rinha public single-format policy', () => {
 		const p1 = makeUser('Copa Policy One'); const p2 = makeUser('Copa Policy Two');
 		let room;
 		try {
-			room = Rooms.createBattle({ format: 'Copa Rinha II', players: [p1, p2].map(user => ({ user, team: 'Pikachu||||thunderbolt||||||||' })) });
+			room = Rooms.createBattle({ format: '[Gen 9] Copa Rinha II', players: [p1, p2].map(user => ({ user, team: 'Pikachu||||thunderbolt||||||||' })) });
 			assert(room?.battle); assert.equal(room.battle.format, COPA_FORMAT);
 		} finally {
 			room?.destroy();

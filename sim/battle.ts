@@ -1952,7 +1952,7 @@ export class Battle {
 
 		this.add('gen', this.gen);
 
-		this.add('tier', format.name);
+		this.add('tier', format.protocolName || format.name);
 		if (this.rated) {
 			if (this.rated === 'Rated battle') this.rated = true;
 			this.add('rated', typeof this.rated === 'string' ? this.rated : '');

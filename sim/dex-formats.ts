@@ -420,6 +420,8 @@ export class RuleTable extends Map<string, string> {
 }
 
 export class Format extends BasicEffect implements Readonly<BasicEffect> {
+	/** Name used by stock clients on the name-derived formats protocol. Also accepted as an alias. */
+	declare readonly protocolName?: string;
 	readonly mod: string;
 	declare readonly desc: string;
 	/**
@@ -659,6 +661,7 @@ export class DexFormats {
 			const ruleset = new Format(format);
 			this.rulesetCache.set(id, ruleset);
 			if (id !== toID(format.name)) this.rulesetCache.set(toID(format.name), ruleset);
+			if (format.protocolName) this.rulesetCache.set(toID(format.protocolName), ruleset);
 			formatsList.push(ruleset);
 		}
 

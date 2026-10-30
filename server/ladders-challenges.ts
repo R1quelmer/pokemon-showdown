@@ -1,3 +1,4 @@
+import { clientFormatID } from './copa-format-policy';
 import type { ChallengeType } from './room-battle';
 
 /**
@@ -219,8 +220,8 @@ export class Challenges extends Map<ID, Challenge[]> {
 	}
 	getUpdate(challenge: Challenge | null) {
 		if (!challenge) return `/challenge`;
-		const teambuilderFormat = challenge.ready ? challenge.ready.formatid : '';
-		return `/challenge ${challenge.format}|${teambuilderFormat}|${challenge.message}|${challenge.acceptButton}|${challenge.rejectButton}`;
+		const teambuilderFormat = challenge.ready ? clientFormatID(challenge.ready.formatid) : '';
+		return `/challenge ${clientFormatID(challenge.format)}|${teambuilderFormat}|${challenge.message}|${challenge.acceptButton}|${challenge.rejectButton}`;
 	}
 	update(userid1: ID, userid2: ID) {
 		const challenge = this.search(userid1, userid2);

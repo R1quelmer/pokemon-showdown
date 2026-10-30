@@ -1492,7 +1492,7 @@ export class GlobalRoomState {
 				prevSection = section;
 				this.formatList += `|,${curColumn}|${section}`;
 			}
-			this.formatList += `|${format.name}`;
+			this.formatList += `|${format.protocolName || format.name}`;
 			let displayCode = 0;
 			if (format.team) displayCode |= 1;
 			if (format.searchShow) displayCode |= 2;
@@ -2104,7 +2104,7 @@ export class GameRoom extends BasicRoom {
 					id: idWithServer,
 					log,
 					players: battle.players.map(p => p.name),
-					format: format.name,
+					format: format.protocolName || format.name,
 					rating: Math.round(rating || 0) || null,
 					private: hidden,
 					password,
@@ -2130,7 +2130,7 @@ export class GameRoom extends BasicRoom {
 			id,
 			log,
 			players: battle.players.map(p => p.name).join(','),
-			format: format.name,
+			format: format.protocolName || format.name,
 			rating, // will probably do nothing
 			hidden: hidden === 0 ? '' : hidden,
 			inputlog: battle.inputLog?.join('\n') || undefined,
@@ -2209,7 +2209,7 @@ export const Rooms = {
 			return null;
 		}
 		const format = Dex.formats.get(options.format);
-		if (Config.copaRinhaSingleFormat) options.format = format.id;
+		if (Config.copaRinhaSingleFormat || format.protocolName) options.format = format.id;
 		if (players.length > format.playerCount) {
 			throw new Error(`${players.length} players were provided, but the format is a ${format.playerCount}-player format.`);
 		}

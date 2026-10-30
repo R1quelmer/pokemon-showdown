@@ -70,3 +70,60 @@ performed here. Existing production credentials/settings are unchanged.
    format; verify a clean rejection and no battle creation. Use a valid team for
    a genuine Copa match. Confirm the object in the private R2 console and canonical
    format ID in the API JSON. Do not change bucket access or credentials.
+
+## Stock psim.us clients: explicit Gen 9 protocol name
+
+The official server still serializes `|formats|` as section/column markers plus
+`name,hexFlags`. It does **not** transmit an independent canonical ID, generation
+field, or National Dex capability. Both official parsers derive `toID(name)`.
+When that result does not start with `gen`, the historical teambuilder fallback
+creates `[Gen 6] <name>` as an auxiliary format. The new picker accepts synthetic
+entries whose visibility fields are undefined, unlike the legacy truthy checks,
+which explains why the auxiliary and original entries can both appear.
+
+The engine format keeps `name: Copa Rinha II` and its explicit canonical ID
+`gen9coparinhanationaldexza`. It now declares an independent **protocol name**
+`[Gen 9] Copa Rinha II`, in section Copa Rinha, column 1. Flags remain hex `e`
+(search, challenge, tournament; player-built teams). Both stock parsers create
+one native Gen 9 format, without the auxiliary Gen 6 entry.
+
+The stock client necessarily derives the *wire alias* `gen9coparinhaii`, because
+its protocol has no separate ID. The server registers the protocol name as an
+alias, normalizes incoming Search/Challenge/cancellation and room creation to
+the canonical ID, and translates outgoing UI-only search/challenge references
+to the wire alias. Matchmaking, validation, ladder keys, room IDs and replay
+storage keep the canonical identifier. Battle `|tier|` and room-list labels use
+the generation-qualified protocol name; this changes labels, not battle rules.
+
+The New Client intentionally strips `[Gen 9]` in some current-generation selectors.
+Such a selector may show only “Copa Rinha II” even when its native model correctly
+contains `[Gen 9] Copa Rinha II`, generation 9. Server-side data cannot override
+that stock rendering convention without client changes; no CSS/string spoof is
+used here. Existing local teams saved under the earlier erroneous Gen 6 entry
+may need their format reassigned to the new entry in the official teambuilder.
+
+Fixtures in `test/server/fixtures/official-formats` preserve the actual upstream
+old/new parser and BattleFormat constructor excerpts, with provenance/licenses.
+Tests remove only TypeScript annotations, reproduce the broken Gen 6 auxiliary
+entry, and verify the actual server packet in both native implementations. They
+also verify native validator aliases, Search/Challenge/cancel packets, canonical
+battle identity and generation-qualified playback tier. No custom client parser
+is used in these regressions.
+
+Deployment for this correction: **server only**, branch
+`feat/copa-rinha-national-dex-za`. Keep Render settings and all R2 variables.
+After Live, reload/reconnect the official psim.us page so the server sends a fresh
+`|formats|` packet. Switch between New and Old Client and confirm one entry.
+Choose that entry for team validation, search and challenge. No deployment or
+modification of `pokemon-showdown-client` is part of this correction. Its earlier
+custom-name normalization is not the solution for the stock psim.us clients.
+
+No R2/storage/API/CORS code was changed or real R2 access performed in this task.
+Automated parser tests are offline snapshots, not a claim of a production match
+on psim.us. Test a completed match after deploying and verify its saved ID and
+an existing replay link as the production acceptance check.
+
+Final verification for the psim.us correction: `npm run build`,
+`npm run tsc -- --noEmit`, `npm run lint` passed, and the focused command above
+plus `test/server/copa-format-protocol.js` passed **145 tests**. The private client
+repository has no changes from this task.

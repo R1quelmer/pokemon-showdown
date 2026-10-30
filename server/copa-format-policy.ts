@@ -8,3 +8,10 @@ export function playerFormatAllowed(format: string): boolean {
 	const resolved = Dex.formats.get(format);
 	return resolved.exists && resolved.id === COPA_FORMAT && !resolved.customRules?.length;
 }
+
+/** Translate only at the outgoing UI boundary; storage/matchmaking keep canonical IDs. */
+export function clientFormatID(format: string): string {
+	if (format.includes('@@@')) return format;
+	const resolved = Dex.formats.get(format);
+	return resolved.protocolName ? toID(resolved.protocolName) : format;
+}

@@ -8,7 +8,7 @@
  * @license MIT
  */
 
-import { playerFormatAllowed, COPA_ONLY_MESSAGE } from './copa-format-policy';
+import { playerFormatAllowed, COPA_ONLY_MESSAGE, clientFormatID } from './copa-format-policy';
 import { LadderStore as RemoteLadderStore } from './ladders-remote';
 import { LadderStore as LocalLadderStore } from './ladders-local';
 
@@ -60,6 +60,8 @@ const searches = new Map<string, {
 class Ladder extends LadderStore {
 	readonly virtualCustom?: 'suspect';
 	constructor(formatid: string) {
+		const resolved = Dex.formats.get(formatid);
+		if (resolved.protocolName && !formatid.includes('@@@')) formatid = resolved.id;
 		const virtual = Ladders.virtualFormats[toID(formatid)];
 		super(virtual?.format || formatid);
 		this.virtualCustom = virtual?.custom;
@@ -341,7 +343,7 @@ class Ladder extends LadderStore {
 			atLeastOne = true;
 		}
 		if (!atLeastOne) games = null;
-		const searching = Ladders.getSearches(user);
+		const searching = Ladders.getSearches(user).map(clientFormatID);
 		(connection || user).send(`|updatesearch|` + JSON.stringify({
 			searching,
 			games,
