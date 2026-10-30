@@ -171,3 +171,65 @@ Pikanium Z e G-Max, Garchomp e Arceus.
 As Megas de Z-A agora usam os mesmos limites de Mega das antigas: várias
 pedras são aceitas por equipe, mas somente um Pokémon pode efetivamente Mega
 Evoluir por jogador. O inventário e os dados de referência estão em [ZA.md](./ZA.md).
+
+## G-Max automático no Teambuilder oficial Gen 9
+
+A regra `Copa Rinha Mechanics` normaliza `set.gigantamax = true` em
+`onChangeSet` quando **a forma exata** tem `canGigantamax` no Dex do mod.
+Não há lista manual nem fallback indiscriminado para a espécie base: formas
+regionais/caps sem elegibilidade continuam sem G-Max, enquanto Toxtricity-Low-Key
+e Urshifu-Rapid-Strike usam os dados/movimentos correspondentes à própria forma.
+
+O hook é executado antes das checagens de legalidade de espécie/G-Max. O validator
+assíncrono reempacota o time modificado; o construtor nativo de Pokemon recebe a
+flag e `getDynamaxRequest` envia `maxMoves.gigantamax` e o G-Max Move adequado.
+A preservação prévia de elegibilidade nas formas Mega do mod continua atendendo
+às checagens prospectivas do validator; não foi alterada. Não há mudança no
+motor, nas condições de Dynamax ou nos limites/exclusividade das gimmicks.
+
+Não é necessário `Gigantamax: Yes`. Para espécies elegíveis, `Yes` continua
+válido e `No` é normalizado para `true`, conforme a política da Copa. Espécies
+sem G-Max continuam com Dynamax normal; flags manuais inválidas continuam
+rejeitadas pelo validator. Fora da regra Copa não ocorre essa normalização.
+
+Após deploy do servidor, no psim.us selecione Copa Rinha II, crie/importe um time
+sem a linha Gigantamax e valide-o novamente. Exemplo legal:
+
+```text
+Pikachu @ Pikanium Z
+Ability: Static
+EVs: 1 HP
+Tera Type: Water
+- Volt Tackle
+
+Charizard @ Charizardite X
+Ability: Blaze
+EVs: 1 HP
+Tera Type: Water
+- Flamethrower
+
+Zapdos
+Ability: Pressure
+EVs: 1 HP
+Tera Type: Water
+- Thunderbolt
+```
+
+Desafie outra sessão e teste cada Pokémon em partidas separadas ou conforme o
+uso único de Max por jogador. Pikachu deve oferecer G-Max Volt Crash, Charizard
+G-Max Wildfire e Zapdos Max Lightning normal. Antes de escolher uma gimmick,
+Pikachu mantém Z/Tera e Charizard mantém Mega/Tera. Após usar uma delas, o mesmo
+Pokémon perde as demais; os recursos não utilizados continuam disponíveis aos
+companheiros. O checkbox G-Max continuará ausente no teambuilder Gen 9, o que é
+esperado. Não é necessário deploy de client nem qualquer alteração em R2/replays.
+
+Regressão ponta a ponta: `test/sim/othermetas/coparinha-auto-gmax.js` recebe um
+time empacotado sem flag, usa o validator assíncrono real pelo alias oficial,
+reempacota/desempacota, cria a batalha e verifica a request ativa, o marcador
+Gmax no protocolo e o movimento executado, além dos casos de formas e gimmicks.
+
+Validação desta alteração: `npm run build`, `npm run tsc -- --noEmit` e
+`npm run lint` aprovados; 154 testes passaram, incluindo os 9 novos testes de
+G-Max automático, as suítes Copa/Mega Z-A e as regressões de protocolo, política,
+Search/Challenge, Render e replay com armazenamento mockado. Não houve teste de
+R2 real nem mudança de client nesta etapa.

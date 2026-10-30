@@ -15,6 +15,12 @@ export const Rulesets: import('../../../sim/dex-formats').ModdedFormatDataTable 
 		effectType: 'ValidatorRule',
 		name: 'Copa Rinha Mechanics',
 		unbanlist: zaUnbans,
+		onChangeSet(set) {
+			// Stock Gen 9 teambuilders omit the G-Max flag. Normalize it before
+			// species legality checks and the validator's team repack for battle.
+			// Use the exact forme: base-species fallback would wrongly flag regional/cap formes.
+			if (this.dex.species.get(set.species).canGigantamax) set.gigantamax = true;
+		},
 		onBegin() {
 			// Side's constructor defaults this to true outside Gen 8.
 			for (const side of this.sides) side.dynamaxUsed = false;
