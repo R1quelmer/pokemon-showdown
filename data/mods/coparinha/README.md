@@ -233,3 +233,31 @@ Validação desta alteração: `npm run build`, `npm run tsc -- --noEmit` e
 G-Max automático, as suítes Copa/Mega Z-A e as regressões de protocolo, política,
 Search/Challenge, Render e replay com armazenamento mockado. Não houve teste de
 R2 real nem mudança de client nesta etapa.
+
+## Sleep Clause Mod nativa
+
+O formato canônico `gen9coparinhanationaldexza` usa também **Sleep Clause Mod**,
+com a implementação upstream de `data/rulesets.ts`. Não foi criado contador,
+status ou tratamento de movimento próprio da Copa. A regra está no servidor e
+vale igualmente para o client próprio e para o client oficial, inclusive pelo
+alias de protocolo `[Gen 9] Copa Rinha II`.
+
+Cada jogador pode manter apenas um Pokémon adversário vivo sob sono induzido
+por sua equipe. O sono de um Pokémon no banco continua contando; o limite se
+libera quando ele acorda, perde o status ou é derrotado. Rest e demais fontes
+aliadas seguem a exceção nativa e não consomem esse limite. A verificação ocorre
+no evento de aplicação de status: também cobre habilidades, efeitos secundários
+e o sono atrasado de Yawn/G-Max Snooze, sem banir os respectivos movimentos.
+Não se trata de Sleep Moves Clause. As regras dos demais formatos não mudam.
+
+`test/sim/othermetas/coparinha-sleep.js` exercita o formato real e cobre movimentos
+indutores distintos, banco, despertar, derrota, Rest antes/depois do primeiro
+sono adversário, Effect Spore, Dire Claw, Yawn, G-Max Snooze e a independência dos
+dois jogadores. As suítes existentes `coparinha.js`, `coparinha-za.js` e
+`coparinha-auto-gmax.js` continuam verificando as quatro gimmicks, a exclusividade
+por Pokémon, as formas Z-A e a normalização automática de G-Max.
+
+Validação local da cláusula: 16 testes específicos e as três suítes Copa Rinha
+existentes, **114 testes aprovados** no total. `oxlint --max-warnings 0` aprovou
+os arquivos da regra e dos testes. Os resultados usam o simulador nativo local,
+sem depender do client, de login, R2 ou de um serviço em produção.

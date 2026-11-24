@@ -35,7 +35,7 @@ describe('Copa Rinha National Dex ZA', () => {
 		assert.equal(format.name, 'Copa Rinha II');
 		assert.equal(format.mod, 'coparinha');
 		assert.equal(Dex.mod(format.mod).gen, 9);
-		assert.deepEqual(format.ruleset, ['Standard AG', 'NatDex Mod', 'Copa Rinha Mechanics']);
+		assert.deepEqual(format.ruleset, ['Standard AG', 'NatDex Mod', 'Copa Rinha Mechanics', 'Sleep Clause Mod']);
 	});
 
 	it('validates the editor test team with past Pokemon, Gen 8 and Gen 9 species', () => {

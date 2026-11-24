@@ -6,6 +6,6 @@ export const Formats: import('../sim/dex-formats').FormatList = [
 		protocolName: "[Gen 9] Copa Rinha II",
 		mod: 'coparinha',
 		searchShow: true,
-		ruleset: ['Standard AG', 'NatDex Mod', 'Copa Rinha Mechanics'],
+		ruleset: ['Standard AG', 'NatDex Mod', 'Copa Rinha Mechanics', 'Sleep Clause Mod'],
 	},
 ];
