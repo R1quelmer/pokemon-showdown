@@ -12,6 +12,7 @@
  */
 
 import { handleReplayRequest } from './copa-replays';
+import { handleTeamRequest } from './copa-teams';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
@@ -347,6 +348,7 @@ export class ServerStream extends Streams.ObjectReadWriteStream<string> {
 				req.resume();
 				req.addListener('end', () => {
 					if (handleReplayRequest(req, res)) return;
+					if (handleTeamRequest(req, res)) return;
 					if (config.customhttpresponse?.(req, res)) {
 						return;
 					}

@@ -7,6 +7,14 @@
 import { SQL, PGDatabase, type DatabaseTable } from '../../lib/database';
 import { FS, Utils } from '../../lib';
 import * as crypto from 'crypto';
+import {
+	shareTeam, prepareTeam, r2TeamStorage, teamURL, validID, uploadLimiter, allowTeamRead, TeamInputError, FORMAT,
+} from '../copa-teams';
+import { clientFormatID } from '../copa-format-policy';
+
+const copaTeams = () => !!Config.copaRinhaSingleFormat;
+const immutableMessage = 'Os links de times da Copa Rinha são imutáveis. Para alterar o time, compartilhe uma nova cópia.';
+const unlistedPage = '<div class="pad"><h2>Times da Copa Rinha</h2><p>Os times são compartilhados somente por link, sem listagem pública ou associação autenticada a um nickname.</p><a class="button" href="/view-teams-upload">Compartilhar time</a></div>';
 
 /** Maximum amount of teams a user can have stored at once. */
 const MAX_TEAMS = 2000;
@@ -140,6 +148,34 @@ export const TeamsHandler = new class {
 		isUpdate?: number
 	) {
 		const connection = context.connection;
+		if (copaTeams()) {
+			this.validateAccess(connection, true);
+			if (isUpdate) { connection.popup(immutableMessage); return null; }
+			if (Monitor.countPrepBattle(connection.ip, connection)) return null;
+			if (!uploadLimiter.allow(`ip:${connection.ip}`) || !uploadLimiter.allow(`user:${connection.user.id}`)) {
+				connection.popup('Limite de compartilhamento atingido (10 por hora). Tente novamente mais tarde.');
+				return null;
+			}
+			try {
+				const prepared = prepareTeam(team);
+				if (prepared.name && context.filter(prepared.name) !== prepared.name) {
+					throw new TeamInputError('O nome do time contém palavras filtradas.');
+				}
+				const sets = Teams.unpack(prepared.packedTeam);
+				if (sets?.some(set => context.filter(set.name) !== set.name)) {
+					throw new TeamInputError('Um apelido do time contém palavras filtradas.');
+				}
+				const shared = await shareTeam(prepared);
+				return {
+					teamid: shared.id, teamName: shared.name, privacy: null, url: teamURL(shared.id),
+					visibility: 'unlisted', immutable: true, requestTeam: team.packedTeam,
+				};
+			} catch (error) {
+				connection.popup(error instanceof TeamInputError ? error.message :
+					'Não foi possível salvar o time. Tente novamente mais tarde.');
+				return null;
+			}
+		}
 		this.validateAccess(connection, true);
 
 		if (Monitor.countPrepBattle(connection.ip, connection)) {
@@ -376,6 +412,12 @@ export const TeamsHandler = new class {
 			throw new Chat.ErrorMessage(message);
 		};
 
+		if (copaTeams()) {
+			if (!user.named) err('Escolha um nickname antes de compartilhar um time.');
+			if (user.locked || user.semilocked) err('Você não pode compartilhar times enquanto estiver bloqueado.');
+			return;
+		}
+
 		if (!Config.usepostgres || !Config.usepostgresteams) {
 			err(`The teams database is currently disabled.`);
 		}
@@ -421,6 +463,7 @@ export const commands: Chat.ChatCommands = {
 		update: 'save',
 		async save(target, room, user, connection, cmd) {
 			TeamsHandler.validateAccess(connection, true);
+			if (copaTeams() && cmd === 'update') return connection.popup(immutableMessage);
 			const isEdit = cmd === 'update';
 			const targets = Utils.splitFirst(target, ',', isEdit ? 4 : 3).map(x => x.trim());
 			const rawTeamID = isEdit ? targets.shift() : undefined;
@@ -439,13 +482,22 @@ export const commands: Chat.ChatCommands = {
 				}, teamID
 			);
 			if (!result) {
+				// The custom client can stop its pending state; stock clients ignore this event.
+				if (copaTeams()) {
+					connection.send(`|queryresponse|copateamupload|` + JSON.stringify({
+						error: 'Compartilhamento não concluído.', requestTeam: rawTeam,
+					}));
+				}
 				return; // error messages were thrown to the user
 			}
 
-			if (result) {
-				connection.send(`|queryresponse|teamupload|` + JSON.stringify(result));
+			// Opaque R2 IDs must never enter the official client's numeric/account team IDs.
+			connection.send(`|queryresponse|${copaTeams() ? 'copateamupload' : 'teamupload'}|` + JSON.stringify(result));
+			if (copaTeams() && 'url' in result && typeof result.url === 'string') {
+				connection.popup(`Time compartilhado: ${result.url}\n\nLink não listado: qualquer pessoa com o link pode ler e importar o time. Não é protegido por conta ou nickname. Guarde o link; ele não aparece em uma lista pública.`);
+			} else {
+				connection.popup(`Access your team now at https://psim.us/t/${result.teamid}!`);
 			}
-			connection.popup(`Access your team now at https://psim.us/t/${result.teamid}!`);
 		},
 		''(target) {
 			return this.parse('/teams user ' + toID(target) || this.user.id);
@@ -460,6 +512,13 @@ export const commands: Chat.ChatCommands = {
 		user: 'view',
 		for: 'view',
 		view(target) {
+			if (copaTeams()) {
+				const id = target.trim();
+				if (!validID(id)) {
+					return this.popupReply('Os times são não listados. Use /teams upload ou /teams view ID com o link que recebeu.');
+				}
+				return this.parse(`/j view-team-${id}`);
+			}
 			const [name, rawNum] = target.split(',').map(toID);
 			const num = parseInt(rawNum);
 			if (rawNum && isNaN(num)) {
@@ -474,6 +533,7 @@ export const commands: Chat.ChatCommands = {
 			return this.parse(`/j view-teams-${page}-${toID(name)}${num ? `-${num}` : ''}`);
 		},
 		async delete(target, room, user, connection) {
+			if (copaTeams()) return this.popupReply(immutableMessage);
 			TeamsHandler.validateAccess(connection, true);
 			const teamid = Number(toID(target));
 			if (isNaN(teamid)) return this.popupReply(`Invalid team ID.`);
@@ -489,6 +549,11 @@ export const commands: Chat.ChatCommands = {
 			}
 		},
 		async setprivacy(target, room, user, connection) {
+			if (copaTeams()) {
+				return this.popupReply(
+					'A visibilidade é por posse do link não listado; não há listagem pública ou senha de conta. ' + immutableMessage
+				);
+			}
 			if (!teamsTable) {
 				return this.popupReply(`Server-side teams feature is disabled.`);
 			}
@@ -550,6 +615,7 @@ export const pages: Chat.PageTable = {
 	},
 	teams: {
 		async all(query, user, connection) {
+			if (copaTeams()) return unlistedPage;
 			if (!user.named) return Rooms.RETRY_AFTER_LOGIN;
 			TeamsHandler.validateAccess(connection);
 			const targetUserid = toID(query.shift()) || user.id;
@@ -577,6 +643,7 @@ export const pages: Chat.PageTable = {
 			return buf;
 		},
 		async filtered(query, user, connection) {
+			if (copaTeams()) return unlistedPage;
 			if (!user.named) return Rooms.RETRY_AFTER_LOGIN;
 			if (!teamsTable) return `<div class="message-error">This feature is disabled.</div>`;
 			const type = query.shift() || "";
@@ -610,6 +677,21 @@ export const pages: Chat.PageTable = {
 			return buf;
 		},
 		async view(query, user, connection) {
+			if (copaTeams()) {
+				// Chat page IDs split on '-'; reconstruct the full capability ID unchanged.
+				const id = query.join('-');
+				if (!validID(id)) throw new Chat.ErrorMessage('ID de time inválido.');
+				if (!allowTeamRead(connection.ip || 'unknown')) {
+					throw new Chat.ErrorMessage('Muitas solicitações de times. Tente novamente em um minuto.');
+				}
+				let shared;
+				try { shared = await r2TeamStorage().get(id); } catch {
+					throw new Chat.ErrorMessage('Armazenamento temporariamente indisponível.');
+				}
+				if (!shared) throw new Chat.ErrorMessage('Time não encontrado.');
+				this.title = `[Time] ${shared.name || id}`;
+				return Utils.html`<div class="pad"><h2>${shared.name || 'Time da Copa Rinha'}</h2><p>Link não listado: qualquer pessoa com o link pode importar.</p><p><a href="${teamURL(id)}" target="_blank" rel="noopener noreferrer">Visualizar, copiar ou importar no client Copa Rinha</a></p><pre>${shared.importText}</pre></div>`;
+			}
 			if (!user.named) return Rooms.RETRY_AFTER_LOGIN;
 			TeamsHandler.validateAccess(connection);
 			const rawTeamid = toID(query.shift() || "");
@@ -646,10 +728,16 @@ export const pages: Chat.PageTable = {
 			buf += `<input name="name" /><br />`;
 
 			buf += `<strong>What's the team's format?</strong><br />`;
-			buf += `<formatselect name="format" format="gen${Dex.gen}ou">[Gen ${Dex.gen} OU]</formatselect><br />`;
+			buf += copaTeams() ?
+				`<formatselect name="format" format="${clientFormatID(FORMAT)}">Copa Rinha II</formatselect><br />` :
+				`<formatselect name="format" format="gen${Dex.gen}ou">[Gen ${Dex.gen} OU]</formatselect><br />`;
 
-			buf += `<strong>Should the team be private? (yes/no)</strong><br />`;
-			buf += `<select name="privacy" /><option value="1">Yes</option><option value="0">No</option></select><br />`;
+			buf += copaTeams() ?
+				'<p>Compartilhamento não listado e imutável: qualquer pessoa com o link poderá ler/importar. ' +
+				'Nickname não comprova autoria. Não é possível substituir ou privatizar o conteúdo depois.</p>' :
+				`<strong>Should the team be private? (yes/no)</strong><br />`;
+			buf += copaTeams() ? '<input type="hidden" name="privacy" value="1" />' :
+				`<select name="privacy" /><option value="1">Yes</option><option value="0">No</option></select><br />`;
 
 			buf += `<strong>Provide the team:</strong><br />`;
 			buf += `<textarea style="width: 100%; height: 400px" name="team"></textarea><br />`;
@@ -659,6 +747,7 @@ export const pages: Chat.PageTable = {
 			return buf;
 		},
 		async edit(query, user, connection) {
+			if (copaTeams()) return `<div class="pad">${immutableMessage}</div>`;
 			if (!user.named) return Rooms.RETRY_AFTER_LOGIN;
 			TeamsHandler.validateAccess(connection);
 			const teamID = toID(query.shift() || "");
@@ -704,6 +793,7 @@ export const pages: Chat.PageTable = {
 			return buf;
 		},
 		async searchpublic(query, user, connection) {
+			if (copaTeams()) return unlistedPage;
 			if (!user.named) return Rooms.RETRY_AFTER_LOGIN;
 			TeamsHandler.validateAccess(connection, true);
 			this.title = '[Teams] Search';
@@ -775,6 +865,7 @@ export const pages: Chat.PageTable = {
 			);
 		},
 		async browse(query, user, connection) {
+			if (copaTeams()) return unlistedPage;
 			if (!user.named) return Rooms.RETRY_AFTER_LOGIN;
 			if (!teamsTable) return `<div class="message-error">This feature is disabled.</div>`;
 			TeamsHandler.validateAccess(connection, true);
@@ -821,7 +912,7 @@ export const pages: Chat.PageTable = {
 };
 
 export function start() {
-	if (Config.usepostgres && Config.usepostgresteams) {
+	if (!copaTeams() && Config.usepostgres && Config.usepostgresteams) {
 		teamsDB = new PGDatabase(Config.usepostgres);
 		teamsTable = teamsDB.getTable<StoredTeam>('teams', 'teamid');
 	}
