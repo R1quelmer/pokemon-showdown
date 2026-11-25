@@ -2,6 +2,7 @@
 import { randomBytes } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { replayIndex, type ReplayQuery, type ReplayPage } from './copa-replay-index';
 
 export const FORMAT = 'gen9coparinhanationaldexza';
 export const CLIENT = 'https://copa-rinha-client.onrender.com';
@@ -19,9 +20,13 @@ export interface Replay {
 	turns: number;
 	endType: string;
 	log: string;
+	visibility?: 'public' | 'private' | 'unlisted' | 'unknown';
 }
 export interface Storage {
 	put(replay: Replay): Promise<void>;
+	index?(replay: Replay): Promise<void>;
+	unindex?(replay: Replay): Promise<void>;
+	list?(query: ReplayQuery): Promise<ReplayPage>;
 	get(id: string): Promise<Replay | null>;
 }
 // SDK error strings/messages are untrusted: emit only fixed, recognized identifiers.
@@ -39,7 +44,7 @@ const NETWORK_CODES = new Set([
 	'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH', 'ERR_TLS_CERT_ALTNAME_INVALID',
 	'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT',
 ]);
-type ReplayStage = 'PrepareReplay' | 'ConfigureR2' | 'PutObject' | 'AnnounceReplay' | 'GetObject';
+type ReplayStage = 'PrepareReplay' | 'ConfigureR2' | 'PutObject' | 'AnnounceReplay' | 'GetObject' | 'IndexReplay';
 export function replayFailure(stage: ReplayStage, error: unknown) {
 	const read = (value: unknown, key: string): unknown => {
 		try {
@@ -82,6 +87,7 @@ export function r2Storage(): Storage {
 		requestHandler: { connectionTimeout: 5000, requestTimeout: 15000 },
 	});
 	storage = {
+		...replayIndex(client, bucket),
 		async put(replay) {
 			await client.send(new PutObjectCommand({
 				Bucket: bucket, Key: `replays/${replay.id}.json`, Body: JSON.stringify(replay), ContentType: 'application/json',
@@ -109,15 +115,42 @@ export interface CompletedBattle {
 	roomid: string;
 	players: { name: string }[];
 	endType: string;
-	room: { getLog(channel: -1): string, add(message: string): { update(): unknown } };
+	room: {
+		settings?: { isPrivate?: unknown }, hideReplay?: boolean, unlistReplay?: boolean,
+		getLog(channel: -1): string, add(message: string): { update(): unknown },
+	};
 }
-export async function saveBattle(battle: CompletedBattle, winner: string, store?: Storage): Promise<Replay | null> {
+const savedBattles = new WeakMap<object, Promise<Replay | null>>();
+// Remember only live room objects, never a persistent/public room-to-ID directory.
+export function saveBattle(battle: CompletedBattle, winner: string, store?: Storage): Promise<Replay | null> {
+	const pending = saveCompletedBattle(battle, winner, store);
+	savedBattles.set(battle.room, pending);
+	return pending;
+}
+/** Native /hidereplay and room privacy changes also remove discovery after completion. */
+export async function concealCopaReplay(room: object, store?: Storage) {
+	const pending = savedBattles.get(room);
+	if (!pending) return;
+	try {
+		const replay = await pending;
+		if (replay?.visibility !== 'public') return;
+		const target = store || r2Storage();
+		await target.put({ ...replay, visibility: 'private' });
+		await target.unindex?.(replay);
+		replay.visibility = 'private';
+	} catch (error) { reportFailure('IndexReplay', error); }
+}
+async function saveCompletedBattle(battle: CompletedBattle, winner: string, store?: Storage): Promise<Replay | null> {
 	if (battle.format !== FORMAT) return null;
 	let stage: ReplayStage = 'PrepareReplay';
 	try {
 		const log = cleanLog(battle.room.getLog(-1));
 		const turns = [...log.matchAll(/^\|turn\|(\d+)$/gm)].map(match => Number(match[1]));
+		const visibility = battle.room.hideReplay || battle.room.settings?.isPrivate ? 'private' :
+			battle.room.unlistReplay ? 'unlisted' :
+			battle.room.settings && battle.room.hideReplay === false ? 'public' : 'unknown';
 		const replay: Replay = {
+			visibility,
 			id: newID(), format: FORMAT, createdAt: new Date().toISOString(), roomid: battle.roomid,
 			players: battle.players.map(p => ({ name: p.name, userid: userid(p.name) })),
 			winner, winnerid: userid(winner), turns: Math.max(0, ...turns),
@@ -127,6 +160,9 @@ export async function saveBattle(battle: CompletedBattle, winner: string, store?
 		const target = store || r2Storage();
 		stage = 'PutObject';
 		await target.put(replay);
+		if (visibility === 'public' && target.index) {
+			try { await target.index(replay); } catch (error) { reportFailure('IndexReplay', error); }
+		}
 		stage = 'AnnounceReplay';
 		const url = `${CLIENT}/replay.html?id=${replay.id}`;
 		battle.room.add(`|raw|<div class="infobox">Replay da Copa Rinha salvo — <a href="${url}" target="_blank" rel="noopener">Assistir replay</a> · <copytext value="${url}">Copiar link</copytext></div>`).update();
@@ -138,10 +174,11 @@ export async function saveBattle(battle: CompletedBattle, winner: string, store?
 }
 export function handleReplayRequest(req: IncomingMessage, res: ServerResponse, store?: Storage): boolean {
 	const path = (req.url || '').split('?')[0];
-	if (!path.startsWith('/copa-rinha/replays/')) return false;
+	if (path !== '/copa-rinha/replays' && !path.startsWith('/copa-rinha/replays/')) return false;
 	res.setHeader('Content-Type', 'application/json; charset=utf-8');
 	res.setHeader('X-Content-Type-Options', 'nosniff');
 	res.setHeader('Vary', 'Origin');
+	res.setHeader('Cache-Control', 'no-store');
 	if (req.headers.origin === CLIENT) res.setHeader('Access-Control-Allow-Origin', CLIENT);
 	const reply = (status: number, body: unknown) => { res.statusCode = status; res.end(JSON.stringify(body)); };
 	if (req.method !== 'GET') {
@@ -150,6 +187,24 @@ export function handleReplayRequest(req: IncomingMessage, res: ServerResponse, s
 		return true;
 	}
 	const id = path.slice('/copa-rinha/replays/'.length);
+	if (!id) {
+		const params = new URL(req.url!, 'https://localhost').searchParams;
+		const player = params.get('player') || '', cursor = params.get('cursor') || '';
+		if ((player && !/^[a-z0-9]{1,18}$/.test(player)) || cursor.length > 2048 ||
+			(cursor && !/^[A-Za-z0-9+/=_-]+$/.test(cursor))) {
+			reply(400, { error: 'Consulta inválida' });
+			return true;
+		}
+		void (async () => {
+			try {
+				const target = store || r2Storage();
+				if (!target.list) throw new Error('Index unavailable');
+				reply(200, await target.list({ player, cursor }));
+			} catch { reply(503, { error: 'Central temporariamente indisponível' }); }
+		})();
+		return true;
+	}
+
 	if (!validID(id)) {
 		reply(400, { error: 'ID inválido' });
 		return true;

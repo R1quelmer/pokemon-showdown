@@ -15,6 +15,8 @@
  * @license MIT
  */
 
+import { concealCopaReplay } from './copa-replays';
+
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz'.split('');
 
 const TIMEOUT_EMPTY_DEALLOCATE = 10 * 60 * 1000;
@@ -220,7 +222,12 @@ export abstract class BasicRoom {
 	scavLeaderboard: AnyObject;
 	responder?: AutoResponder | null;
 	privacySetter?: Set<ID> | null;
-	hideReplay: boolean;
+	private copaHideReplay = false;
+	get hideReplay() { return this.copaHideReplay; }
+	set hideReplay(value: boolean) {
+		this.copaHideReplay = value;
+		if (value && Config.copaRinhaSingleFormat) void concealCopaReplay(this);
+	}
 
 	reportJoins: boolean;
 	batchJoins: number;
@@ -829,6 +836,7 @@ export abstract class BasicRoom {
 	}
 	setPrivate(privacy: PrivacySetting, password?: string) {
 		this.settings.isPrivate = privacy;
+		if (privacy && Config.copaRinhaSingleFormat) void concealCopaReplay(this);
 		this.saveSettings();
 
 		if (privacy) {
