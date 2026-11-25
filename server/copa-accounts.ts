@@ -353,6 +353,8 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 		reply(403, { error: 'Solicitação não permitida.' });
 		return true;
 	}
+	// Decode UTF-8 across transport chunks before parsing password JSON.
+	req.setEncoding('utf8');
 	let body = '', oversized = false;
 	req.on('data', chunk => {
 		if (!oversized) {

@@ -24,7 +24,7 @@ describe('Copa private accounts', () => {
 		const service = new CopaAccounts(fixture());
 		const previous = Config.copaRinhaSingleFormat;
 		Config.copaRinhaSingleFormat = true;
-		async function request(action, data, authorization) {
+		async function request(action, data, authorization, splitBytes = false) {
 			return new Promise(resolve => {
 				const req = new PassThrough();
 				req.url = '/copa-rinha/accounts/' + action;
@@ -34,7 +34,9 @@ describe('Copa private accounts', () => {
 				const headers = {};
 				const res = { statusCode: 200, setHeader(key, value) { headers[key] = value; }, end(body) { resolve({ status: this.statusCode, body: JSON.parse(body), headers }); } };
 				assert(handleAccountRequest(req, res, service));
-				req.end(JSON.stringify(data));
+				const bytes = Buffer.from(JSON.stringify(data));
+				if (splitBytes) for (const byte of bytes) req.write(Buffer.from([byte]));
+				req.end(splitBytes ? undefined : bytes);
 			});
 		}
 		try {
@@ -55,6 +57,9 @@ describe('Copa private accounts', () => {
 				else Object.assign(process.env, { COPA_RINHA_ADMIN_KEY: previousKey });
 			}
 
+			const unicode = { name: 'Copa UTF8', password: 'senha-copa-única-🚀-928' };
+			assert.equal((await request('register', unicode, undefined, true)).status, 200);
+			assert.equal((await request('login', unicode)).status, 200, 'UTF-8 survives chunk boundaries');
 			for (let i = 0; i < 11; i++) {
 				const response = await request('login', { name: 'HTTP QA', password: 'wrong-password-value' });
 				assert.equal(response.status, i === 10 ? 429 : 401);

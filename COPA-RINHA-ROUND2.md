@@ -23,9 +23,13 @@ O administrador pode reservar/liberar reservas em lote, desativar/reativar conta
 e emitir recuperação descartável de 24 horas. Contas registradas não são liberadas
 por expiração de sessão ou remoção de reserva. Recuperação revoga sessões anteriores.
 Limites atuais: 1000 contas, 4096 sessões e registro de até 2 MiB. scrypt permite duas
-derivações simultâneas; login tem limites por nickname e por origem de rede. Não
+derivações simultâneas por processo; login tem limites por nickname e por origem de rede. Não
 se confia cegamente em X-Forwarded-For; a agregação por proxy precisa ser observada
 no teste real do Render, principalmente com vários participantes atrás do mesmo IP.
+
+O parser HTTP mantém a decodificação UTF-8 entre pacotes, evitando cadastrar uma
+senha com acentos/emoji diferente daquela recebida depois no login. A regressão
+reproduziu 401 antes da correção e passou após ela.
 
 O grant HTTPS de 30 segundos é descartável e vinculado ao challenge nativo daquela
 conexão. No WebSocket só transita o marcador público `copa`, nunca senha/bearer.
