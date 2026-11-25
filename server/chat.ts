@@ -1153,6 +1153,7 @@ export class CommandContext extends MessageContext {
 			throw new Chat.ErrorMessage(this.TL`You must choose a name before you can talk.`);
 		}
 		if (!user.can('bypassall')) {
+			const chatAccount = user.registered || user.autoconfirmed || connection.hasCopaSession(user);
 			const lockType = (user.namelocked ? this.TL`namelocked` : user.locked ? this.TL`locked` : ``);
 			const lockExpiration = Punishments.checkLockExpiration(user.namelocked || user.locked);
 			if (room) {
@@ -1164,7 +1165,7 @@ export class CommandContext extends MessageContext {
 						throw new Chat.ErrorMessage(this.TL`You are ${lockType} and can't talk in chat. ${lockExpiration}`);
 					}
 				}
-				if (!room.persist && !room.roomid.startsWith('help-') && !(user.registered || user.autoconfirmed)) {
+				if (!room.persist && !room.roomid.startsWith('help-') && !chatAccount) {
 					this.sendReply(
 						this.TL`|html|<div class="message-error">You must be registered to chat in temporary rooms (like battles).</div>` +
 						this.TL`You may register in the <button name="openOptions"><i class="fa fa-cog"></i> Options</button> menu.`
@@ -1202,14 +1203,15 @@ export class CommandContext extends MessageContext {
 			}
 			if (targetUser) {
 				// this accounts for users who are autoconfirmed on another alt, but not registered
-				if (!(user.registered || user.autoconfirmed)) {
+				if (!chatAccount) {
 					this.sendReply(
 						this.TL`|html|<div class="message-error">You must be registered to send private messages.</div>` +
 						this.TL`You may register in the <button name="openOptions"><i class="fa fa-cog"></i> Options</button> menu.`
 					);
 					throw new Chat.Interruption();
 				}
-				if (targetUser.id !== user.id && !(targetUser.registered || targetUser.autoconfirmed)) {
+				if (targetUser.id !== user.id && !(targetUser.registered || targetUser.autoconfirmed ||
+					targetUser.connections.some(conn => conn.hasCopaSession(targetUser)))) {
 					throw new Chat.ErrorMessage(this.TL`That user is unregistered and cannot be PMed.`);
 				}
 				if (lockType && !targetUser.can('lock')) {

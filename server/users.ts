@@ -215,6 +215,10 @@ const connections = new Map<string, Connection>();
 
 export class Connection {
 	copaSession?: { id: string, session: string, expires: number };
+	hasCopaSession(user: User) {
+		return !!(Config.copaRinhaSingleFormat && this.user === user && this.copaSession &&
+			this.copaSession.id === user.id && user.copaAccountId === user.id && this.copaSession.expires > Date.now());
+	}
 	/**
 	 * Connection IDs are mostly meaningless, beyond being known to be
 	 * unique among connections. They set in `socketConnect` to

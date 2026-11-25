@@ -19,6 +19,72 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('allows verified Copa chat and PMs while enforcing native moderation and guest checks', async () => {
+		const config = Config.copaRinhaSingleFormat;
+		const source = copaAccounts.source;
+		Config.copaRinhaSingleFormat = true;
+		copaAccounts.source = fixture();
+		const alice = makeUser(), bob = makeUser(), visitor = makeUser('Copa Chat Guest');
+		const official = makeUser('Copa Chat Official');
+		const lobby = Rooms.get('lobby');
+		const lobbyModchat = lobby.settings.modchat;
+		let battle;
+		visitor.registered = false;
+		const say = (user, room, target, message = 'hello') => new Chat.CommandContext({
+			message, room, user, connection: user.connections[0],
+		}).checkChat(message, room, target);
+		try {
+			for (const [index, user] of [alice, bob].entries()) {
+				const name = index ? 'Copa Chat Bob' : 'Copa Chat Alice';
+				const connection = user.connections[0];
+				connection.challenge = String(index + 1).repeat(256);
+				const session = await copaAccounts.authenticate('register', name, password);
+				await copaAccounts.grant(session.token, '4|' + connection.challenge);
+				await user.rename(name, 'copa', false, connection);
+				assert.equal(user.registered, false);
+				assert(!user.autoconfirmed);
+			}
+			const team = Teams.pack(Teams.import('Pikachu\n- Thunderbolt'));
+			battle = Rooms.createBattle({
+				format: 'gen9coparinhanationaldexza',
+				players: [{ user: alice, team }, { user: bob, team }],
+			});
+			assert(battle && !battle.persist);
+			assert(!alice.can('mute', null, battle));
+			for (const user of [visitor, official]) {
+				user.joinRoom(battle.roomid, user.connections[0]);
+			}
+			alice.joinRoom(lobby.roomid, alice.connections[0]);
+			assert.equal(say(alice, battle), 'hello');
+			assert.equal(say(alice, lobby, null, 'hello lobby'), 'hello lobby');
+			assert.throws(() => say(alice, lobby, null, 'hello lobby'), /same message again/);
+			assert.equal(say(alice, null, bob), 'hello');
+			assert.equal(say(alice, null, official), 'hello');
+			assert.equal(say(official, null, alice), 'hello');
+			assert.throws(() => say(visitor, battle), Chat.Interruption);
+			assert.throws(() => say(visitor, null, alice), Chat.Interruption);
+			assert.throws(() => say(alice, null, visitor), /unregistered/);
+			assert.throws(() => say(alice, battle, null, 'a'.repeat(1001)), /too long/);
+			bob.settings.blockPMs = true;
+			assert.throws(() => say(alice, null, bob), /blocking private messages/);
+			lobby.settings.modchat = 'autoconfirmed';
+			assert.throws(() => say(alice, lobby), Chat.Interruption);
+			battle.mute(alice, 60000);
+			assert.throws(() => say(alice, battle), /muted/);
+			alice.connections[0].copaSession.expires = Date.now();
+			assert.throws(() => say(alice, null, official), Chat.Interruption);
+			assert.throws(() => say(official, null, alice), /unregistered/);
+		} finally {
+			lobby.settings.modchat = lobbyModchat;
+			for (const user of [alice, bob, visitor, official]) {
+				user.disconnectAll();
+				user.destroy();
+			}
+			battle?.destroy();
+			Object.assign(Config, { copaRinhaSingleFormat: config });
+			Object.assign(copaAccounts, { source });
+		}
+	});
 	it('HTTP API requires admin authorization, enforces login limits and sends no-store responses', async () => {
 		const { PassThrough } = require('stream');
 		const service = new CopaAccounts(fixture());
