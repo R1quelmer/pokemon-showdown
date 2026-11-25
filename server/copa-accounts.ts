@@ -19,7 +19,9 @@ interface Account {
 	name: string;
 	password: string | null;
 	disabled?: boolean;
+	avatar?: string;
 }
+interface PublicMember { id: ID; name: string; avatar: string }
 interface Session {
 	id: string;
 	expires: number;
@@ -122,9 +124,10 @@ async function matches(password: unknown, stored: string | null) {
 export class CopaAccounts {
 	private source?: AccountStore;
 	private now: () => number;
+	private memberCache?: { expires: number, result: Promise<PublicMember[]> };
 	constructor(source?: AccountStore, now = () => Date.now()) { this.source = source; this.now = now; }
 	private read() { return (this.source || storage()).read(); }
-	private async change<T>(operation: (value: Registry) => T): Promise<T> {
+	private async change<T>(operation: (value: Registry) => T, changesMembers = false): Promise<T> {
 		for (let attempt = 0; attempt < 6; attempt++) {
 			const { value, etag } = await this.read();
 			const now = this.now();
@@ -138,6 +141,7 @@ export class CopaAccounts {
 				throw new AccountError(503, 'Registro de contas cheio.');
 			try {
 				await (this.source || storage()).write(value, etag);
+				if (changesMembers) this.memberCache = undefined;
 				return result;
 			} catch (error: any) {
 				if (![409, 412].includes(error.$metadata?.httpStatusCode))
@@ -145,6 +149,25 @@ export class CopaAccounts {
 			}
 		}
 		throw new AccountError(409, 'Outra alteração está em andamento. Tente novamente.');
+	}
+	publicMembers() {
+		if (this.memberCache && this.memberCache.expires > this.now()) return this.memberCache.result;
+		const result = this.read().then(({ value }) => Object.entries(value.accounts)
+			.filter(([, account]) => account.password && !account.disabled)
+			.map(([id, account]) => ({ id: id as ID, name: account.name, avatar: account.avatar || 'unknown' })));
+		this.memberCache = { expires: this.now() + 30000, result };
+		return result;
+	}
+	async setAvatar(proof: Grant, avatar: string) {
+		await this.change(value => {
+			const session = value.sessions[proof.session];
+			const account = value.accounts[proof.id];
+			if (session?.id !== proof.id || session.expires <= this.now() || proof.expires <= this.now() ||
+				!account?.password || account.disabled) {
+				throw new AccountError(401, 'Sessão inválida ou expirada.');
+			}
+			account.avatar = avatar;
+		}, true);
 	}
 	private session(value: Registry, token: unknown) {
 		if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token))
@@ -178,7 +201,7 @@ export class CopaAccounts {
 					throw new AccountError(503, 'Limite de contas atingido.');
 				value.accounts[user.id] = { name: user.name, password: encoded };
 				return this.issue(value, user.id);
-			});
+			}, true);
 		}
 		const { value } = await this.read();
 		const account = Object.hasOwn(value.accounts, user.id) ? value.accounts[user.id] : undefined;
@@ -213,7 +236,9 @@ export class CopaAccounts {
 				value.accounts[id]?.disabled)
 				throw new AccountError(401, 'Identificação local inválida.');
 			delete value.grants[hash(challenge)];
-			return { id, session: grant.session, expires: value.sessions[grant.session].expires };
+			return {
+				id, session: grant.session, expires: value.sessions[grant.session].expires, avatar: value.accounts[id]?.avatar,
+			};
 		});
 	}
 	async protectedName(id: string) { return Object.hasOwn((await this.read()).value.accounts, id); }
@@ -273,7 +298,7 @@ export class CopaAccounts {
 				}
 			}
 			return action === 'recover' ? { recovery, expires: this.now() + DAY } : { success: true };
-		});
+		}, true);
 		if (action === 'disable' || action === 'recover') for (const user of users) revokeLive(user.id);
 		return result;
 	}
@@ -293,7 +318,7 @@ export class CopaAccounts {
 				if (session.id === recovery.id)
 					delete value.sessions[key];
 			return this.issue(value, recovery.id);
-		});
+		}, true);
 	}
 }
 function revokeLive(id?: string, sessionHash?: string) {

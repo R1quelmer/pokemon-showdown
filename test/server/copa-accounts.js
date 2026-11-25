@@ -19,6 +19,76 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('lists active members, persists avatar choices and reuses the account cache for live presence', async () => {
+		const { crqHandlers } = require('../../dist/server/chat-plugins/copa-rinha-online');
+		const source = copaAccounts.source, copa = Config.copaRinhaSingleFormat;
+		const store = fixture();
+		let reads = 0;
+		copaAccounts.source = { ...store, read() { reads++; return store.read(); } };
+		Config.copaRinhaSingleFormat = true;
+		const user = makeUser(), guest = makeUser(), official = makeUser('Official Only');
+		const lobby = Rooms.get('lobby');
+		const publicBattle = 'battle-member-public';
+		const privateBattle = 'battle-member-private';
+		const privateRoom = 'member-secret-room';
+		const query = async () => (await crqHandlers.copapresence.call({}, 'members', null, true)).members;
+		try {
+			const account = await copaAccounts.authenticate('register', 'Zeta Member', password);
+			await copaAccounts.authenticate('register', 'Alpha Member', password);
+			await copaAccounts.authenticate('register', 'Disabled Member', password);
+			await copaAccounts.admin('disable', ['Disabled Member']);
+			const beforeOfficialAvatar = reads;
+			await Chat.parse('/avatar dawn', null, official, official.connections[0]);
+			assert.equal(official.avatar, 'dawn');
+			assert.equal(reads, beforeOfficialAvatar);
+			const connection = user.connections[0];
+			connection.challenge = 'a'.repeat(256);
+			await copaAccounts.grant(account.token, challenge);
+			await user.rename('Zeta Member', 'copa', false, connection);
+			await Chat.parse('/avatar cynthia', null, user, connection);
+			assert.equal(store.value().accounts.zetamember.avatar, 'cynthia');
+			assert.equal(user.avatar, 'cynthia');
+			user.joinRoom(lobby.roomid, connection);
+			Rooms.rooms.set(publicBattle, { battle: { ended: false }, settings: {} });
+			Rooms.rooms.set(privateBattle, { battle: { ended: false }, settings: { isPrivate: 'hidden' } });
+			Rooms.rooms.set(privateRoom, { title: 'Private activity', type: 'chat', persist: true, settings: { modjoin: '+' } });
+			user.games.add(privateBattle);
+			user.games.add(publicBattle);
+			user.inRooms.add(privateRoom);
+			const startingReads = reads;
+			const [result, second] = await Promise.all([query(), query()]);
+			assert.deepEqual(result, second);
+			assert.equal(reads - startingReads, 1);
+			assert.deepEqual(result, [
+				{ name: 'Alpha Member', avatar: 'unknown', online: false, rooms: [] },
+				{ name: 'Zeta Member', avatar: 'cynthia', online: true, rooms: [lobby.title], battle: publicBattle },
+			]);
+			Rooms.get(publicBattle).settings.isPrivate = true;
+			assert.equal((await query())[1].battle, undefined);
+			assert.equal(reads - startingReads, 1, 'presence changes do not reread R2');
+			user.games.clear();
+			user.inRooms.delete(privateRoom);
+			user.disconnectAll();
+			assert.deepEqual((await query())[1], { name: 'Zeta Member', avatar: 'cynthia', online: false, rooms: [] });
+			const reconnect = guest.connections[0];
+			reconnect.challenge = 'b'.repeat(256);
+			await copaAccounts.grant(account.token, '4|' + reconnect.challenge);
+			await guest.rename('Zeta Member', 'copa', false, reconnect);
+			assert.equal(reconnect.user.avatar, 'cynthia');
+			await copaAccounts.admin('disable', ['Zeta Member']);
+			assert.deepEqual((await query()).map(member => member.name), ['Alpha Member']);
+		} finally {
+			for (const roomid of [publicBattle, privateBattle, privateRoom]) Rooms.rooms.delete(roomid);
+			user.games.clear();
+			user.inRooms.delete(privateRoom);
+			for (const participant of [user, guest, official]) {
+				participant.disconnectAll();
+				participant.destroy();
+			}
+			Object.assign(copaAccounts, { source, memberCache: undefined });
+			Object.assign(Config, { copaRinhaSingleFormat: copa });
+		}
+	});
 	it('allows verified Copa chat and PMs while enforcing native moderation and guest checks', async () => {
 		const config = Config.copaRinhaSingleFormat;
 		const source = copaAccounts.source;

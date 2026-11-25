@@ -93,14 +93,16 @@ describe('Copa Rinha public online presence', () => {
 		user.statusType = 'idle'; user.userMessage = '';
 		assert.equal(query().users.find(entry => entry.name === user.name).status, '!(Idle) ');
 	});
-	it('reports an active battle without exposing its room, opponents or private settings', () => {
+	it('reports public battles without exposing private battle activity', () => {
 		const user = create('CopaRosterBattle'), roomid = 'battle-presence-private';
 		Rooms.rooms.set(roomid, { battle: { ended: false }, settings: { isPrivate: true } });
 		user.games.add(roomid);
 		try {
 			const row = query().users.find(entry => entry.name === user.name);
-			assert.equal(row.inBattle, true);
+			assert.equal(row.inBattle, false);
 			assert(!JSON.stringify(row).includes(roomid));
+			Rooms.get(roomid).settings.isPrivate = false;
+			assert.equal(query().users.find(entry => entry.name === user.name).inBattle, true);
 			Rooms.get(roomid).battle.ended = true;
 			assert.equal(query().users.find(entry => entry.name === user.name).inBattle, false);
 		} finally { user.games.delete(roomid); Rooms.rooms.delete(roomid); }

@@ -1,4 +1,41 @@
 /** Public, connection-independent presence snapshots for the Copa Rinha client. */
+import { copaAccounts } from '../copa-accounts';
+
+function isPublicRoom(room: Room): boolean {
+	return !room.settings.isPrivate && !room.settings.modjoin && (!room.parent || isPublicRoom(room.parent));
+}
+
+function publicBattle(user: User) {
+	if (user.settings.hideBattlesFromTrainerCard) return undefined;
+	return [...user.games].find(id => {
+		const room = Rooms.get(id);
+		return !!room?.battle && !room.battle.ended && isPublicRoom(room);
+	});
+}
+
+async function memberPresence() {
+	try {
+		const accounts = await copaAccounts.publicMembers();
+		return accounts.map(({ id, name, avatar }) => {
+			const user = Users.getExact(id);
+			if (!user?.connected || !user.named || !user.connections.some(connection => connection.hasCopaSession(user))) {
+				return { name, avatar, online: false, rooms: [] };
+			}
+			const rooms: string[] = [];
+			for (const roomid of user.inRooms) {
+				const room = Rooms.get(roomid);
+				if (room?.persist && room.type === 'chat' && !room.settings.isPersonal && isPublicRoom(room)) {
+					rooms.push(room.title);
+				}
+			}
+			return {
+				name, avatar: user.avatar, online: true, battle: publicBattle(user), rooms: rooms.sort(),
+			};
+		}).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
+	} catch {
+		return null;
+	}
+}
 
 interface PublicOnlineUser {
 	name: string;
@@ -9,7 +46,7 @@ interface PublicOnlineUser {
 }
 
 export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
-	copapresence(_target, _requester, trustable) {
+	copapresence(target, _requester, trustable) {
 		if (!trustable || !Config.copaRinhaSingleFormat) return false;
 		const users: PublicOnlineUser[] = [];
 		const seen = new Set<ID>();
@@ -22,13 +59,12 @@ export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
 				continue;
 			}
 			// Match the public userdetails fields, never serialize a User or Connection.
-			const inBattle = [...user.games].some(id => {
-				const room = Rooms.get(id);
-				return !!room?.battle && !room.battle.ended;
-			});
+			const inBattle = !!publicBattle(user);
 			users.push({ name: user.name, avatar: user.avatar, status: user.getStatus(), statusType: user.statusType, inBattle });
 		}
 		users.sort((a, b) => a.name.localeCompare(b.name));
-		return { total: users.length + guests, guests, users };
+		const snapshot = { total: users.length + guests, guests, users };
+		if (target === 'members') return memberPresence().then(members => ({ ...snapshot, members }));
+		return snapshot;
 	},
 };

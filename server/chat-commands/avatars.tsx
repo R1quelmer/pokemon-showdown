@@ -7,6 +7,7 @@
  */
 
 import { FS, Net } from "../../lib";
+import { copaAccounts } from '../copa-accounts';
 
 const AVATARS_FILE = 'config/avatars.json';
 
@@ -710,7 +711,7 @@ for (const avatar of OFFICIAL_AVATARS_FLAMIBANE) OFFICIAL_AVATARS.add(avatar);
 for (const avatar of OFFICIAL_AVATARS_RADU) OFFICIAL_AVATARS.add(avatar);
 
 export const commands: Chat.ChatCommands = {
-	avatar(target, room, user) {
+	async avatar(target, room, user, connection) {
 		if (!target) return this.parse(`${this.cmdToken}avatars`);
 		const [maybeAvatar, silent] = target.split(',');
 		const avatar = Avatars.userCanUse(user, maybeAvatar);
@@ -722,7 +723,18 @@ export const commands: Chat.ChatCommands = {
 
 		this.runBroadcast();
 		if (!this.broadcasting) {
+			const proof = connection.copaSession;
+			if (proof && connection.hasCopaSession(user)) {
+				if (silent) return;
+				try {
+					await copaAccounts.setAvatar(proof, avatar);
+				} catch {
+					throw new Chat.ErrorMessage('Não foi possível salvar seu avatar. Tente novamente.');
+				}
+				if (!connection.hasCopaSession(user) || connection.copaSession !== proof) return;
+			}
 			user.avatar = avatar;
+			if (proof && connection.hasCopaSession(user)) user.update();
 			if (user.id in customAvatars && !avatar.endsWith('xmas')) {
 				Avatars.setDefault(user.id, avatar);
 			}

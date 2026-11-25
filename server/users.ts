@@ -667,6 +667,11 @@ export class User extends Chat.MessageContext {
 					users.get(userid)?.autoconfirmed || Users.isTrusted(userid)) return null;
 				this.copaAccountId = userid;
 				Object.assign(connection, { copaSession: grant });
+				if (grant.avatar && Users.Avatars?.canUse(userid, grant.avatar)) {
+					this.avatar = grant.avatar;
+					const existing = users.get(userid);
+					if (existing?.copaAccountId === userid) existing.avatar = grant.avatar;
+				}
 				return '1';
 			} catch {
 				this.send(`|nametaken|${name}|Identificação local inválida ou indisponível.`);
