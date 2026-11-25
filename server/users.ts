@@ -643,6 +643,12 @@ export class User extends Chat.MessageContext {
 		}
 	}
 	async validateToken(token: string, name: string, userid: ID, connection: Connection) {
+		if (Config.copaRinhaSingleFormat && this.copaAccountId && this.copaAccountId !== userid) {
+			// All tabs on this User belong to one account; switching needs a fresh connection.
+			this.send(`|nametaken|${name}|Saia da conta atual antes de usar outro nickname.`);
+			return null;
+		}
+
 		if (Config.copaRinhaSingleFormat && token === 'copa') {
 			try {
 				if (this.registered || this.trusted || this.autoconfirmed ||

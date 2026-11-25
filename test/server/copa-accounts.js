@@ -214,6 +214,22 @@ describe('Copa private accounts', () => {
 			Object.assign(global, { Verifier: verify });
 		}
 	});
+	it('requires logout before changing the account of an existing shared User', async () => {
+		const previous = Config.copaRinhaSingleFormat;
+		Config.copaRinhaSingleFormat = true;
+		const user = makeUser('Copa Account One');
+		try {
+			user.copaAccountId = user.id;
+			for (const token of ['copa', '']) {
+				assert.equal(await user.validateToken(token, 'Other Account', 'otheraccount', user.connections[0]), null);
+				assert.equal(user.copaAccountId, 'copaaccountone');
+				assert.equal(user.id, 'copaaccountone');
+			}
+		} finally {
+			user.disconnectAll(); user.destroy();
+			Object.assign(Config, { copaRinhaSingleFormat: previous });
+		}
+	});
 	it('native local merge requires matching account proof and never marks a local account officially registered', () => {
 		const previous = Config.copaRinhaSingleFormat;
 		Config.copaRinhaSingleFormat = true;
