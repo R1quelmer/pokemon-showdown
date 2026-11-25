@@ -13,6 +13,8 @@
 
 import { handleReplayRequest } from './copa-replays';
 import { handleTeamRequest } from './copa-teams';
+import { handleAccountRequest } from './copa-accounts';
+import { watchCopaConnection } from './copa-connection-liveness';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
@@ -344,6 +346,7 @@ export class ServerStream extends Streams.ObjectReadWriteStream<string> {
 			const avatarServer = new StaticServer('./config/avatars');
 			const staticServer = new StaticServer('./server/static');
 			const staticRequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
+				if (handleAccountRequest(req, res)) return;
 				// console.log(`static rq: ${req.socket.remoteAddress}:${req.socket.remotePort} -> ${req.socket.localAddress}:${req.socket.localPort} - ${req.method} ${req.url} ${req.httpVersion} - ${req.rawHeaders.join('|')}`);
 				req.resume();
 				req.addListener('end', () => {
@@ -489,6 +492,7 @@ export class ServerStream extends Streams.ObjectReadWriteStream<string> {
 
 		const socketid = `${++this.socketCounter}`;
 		this.sockets.set(socketid, socket);
+		if (Config.copaRinhaSingleFormat) watchCopaConnection(socket);
 
 		let socketip = socket.remoteAddress;
 		if (this.isTrustedProxyIp(socketip)) {

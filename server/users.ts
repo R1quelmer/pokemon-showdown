@@ -46,6 +46,7 @@ const PERMALOCK_CACHE_TIME = 30 * 24 * 60 * 60 * 1000; // 30 days
 const DEFAULT_TRAINER_SPRITES = [1, 2, 101, 102, 169, 170, 265, 266];
 
 import { Utils, type ProcessManager } from '../lib';
+import { copaAccounts } from './copa-accounts';
 import {
 	Auth, GlobalAuth, PLAYER_SYMBOL, HOST_SYMBOL, type RoomPermission, type GlobalPermission,
 } from './user-groups';
@@ -213,6 +214,7 @@ function isPublicBot(userid: ID) {
 const connections = new Map<string, Connection>();
 
 export class Connection {
+	copaSession?: { id: string, session: string, expires: number };
 	/**
 	 * Connection IDs are mostly meaningless, beyond being known to be
 	 * unique among connections. They set in `socketConnect` to
@@ -337,6 +339,7 @@ export interface UserSettings {
 
 // User
 export class User extends Chat.MessageContext {
+	copaAccountId?: string;
 	/** In addition to needing it to implement MessageContext, this is also nice for compatibility with Connection. */
 	override readonly user: User;
 	/**
@@ -640,7 +643,37 @@ export class User extends Chat.MessageContext {
 		}
 	}
 	async validateToken(token: string, name: string, userid: ID, connection: Connection) {
+		if (Config.copaRinhaSingleFormat && token === 'copa') {
+			try {
+				if (this.registered || this.trusted || this.autoconfirmed ||
+					users.get(userid)?.registered || users.get(userid)?.trusted ||
+					users.get(userid)?.autoconfirmed || Users.isTrusted(userid)) {
+					throw new Error('Official identity');
+				}
+				const grant = await copaAccounts.consume(connection.challenge, userid);
+				if (grant.id !== userid) throw new Error('Wrong identity');
+				if (connection.user !== this || this.registered || this.trusted || this.autoconfirmed ||
+					users.get(userid)?.registered || users.get(userid)?.trusted ||
+					users.get(userid)?.autoconfirmed || Users.isTrusted(userid)) return null;
+				this.copaAccountId = userid;
+				Object.assign(connection, { copaSession: grant });
+				return '1';
+			} catch {
+				this.send(`|nametaken|${name}|Identificação local inválida ou indisponível.`);
+				return null;
+			}
+		}
+
 		if (!token && Config.noguestsecurity) {
+			if (Config.copaRinhaSingleFormat) {
+				try {
+					if (await copaAccounts.protectedName(userid)) {
+						this.send(`|nametaken|${name}|Este nickname exige uma conta Copa Rinha.`);
+						return null;
+					}
+				} catch { this.send(`|nametaken|${name}|Identificação temporariamente indisponível.`); return null; }
+			}
+
 			if (Users.isTrusted(userid)) {
 				this.send(`|nametaken|${name}|You need an authentication token to log in as a trusted user.`);
 				return null;
@@ -706,6 +739,22 @@ export class User extends Chat.MessageContext {
 			return null;
 		}
 
+		if (Config.copaRinhaSingleFormat) {
+			// An unsigned/local credential must never inherit official account authority.
+			if (userType !== '1' && this.copaAccountId) {
+				this.send(`|nametaken|${name}|Use uma conexão separada no client oficial para autenticação oficial.`);
+				return null;
+			}
+			if (userType === '1') {
+				try {
+					if (await copaAccounts.protectedName(userid)) {
+						this.send(`|nametaken|${name}|Este nickname exige a senha da conta Copa Rinha.`);
+						return null;
+					}
+				} catch { this.send(`|nametaken|${name}|Identificação temporariamente indisponível.`); return null; }
+			}
+		}
+
 		// future-proofing
 		this.s1 = tokenDataSplit[5];
 		this.s2 = tokenDataSplit[6];
@@ -764,7 +813,7 @@ export class User extends Chat.MessageContext {
 			this.send(`|nametaken||Your name contains a banned word.`);
 			return false;
 		} else {
-			if (userid === this.id && !newlyRegistered) {
+			if (userid === this.id && !newlyRegistered && !(Config.copaRinhaSingleFormat && token === 'copa')) {
 				return this.forceRename(name, this.registered);
 			}
 		}
@@ -772,6 +821,10 @@ export class User extends Chat.MessageContext {
 		const userType = await this.validateToken(token, name, userid, connection);
 		if (userType === null) return;
 		if (userType === '1') newlyRegistered = false;
+		if (Config.copaRinhaSingleFormat && token === 'copa' && userid === this.id) {
+			// Refresh a verified connection grant without counting a new nickname.
+			return this.forceRename(name, false);
+		}
 
 		if (!this.trusted && userType === '1') { // userType '1' means unregistered
 			const elapsed = Date.now() - this.lastNewNameTime;
@@ -801,6 +854,10 @@ export class User extends Chat.MessageContext {
 		if (conflictUser) {
 			// unregistered users can only merge in limited situations
 			let canMerge = registered && conflictUser.registered;
+			if (Config.copaRinhaSingleFormat && !registered && !conflictUser.registered &&
+				this.copaAccountId === userid && conflictUser.copaAccountId === userid &&
+				this.connections.some(connection => connection.copaSession?.id === userid)) canMerge = true;
+
 			if (
 				!registered && !conflictUser.registered && conflictUser.latestIp === this.latestIp &&
 				!conflictUser.connected

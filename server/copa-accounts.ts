@@ -1,0 +1,405 @@
+/** Copa-only accounts. Passwords/tokens never enter Showdown chat or its assertion namespace. */
+import { randomBytes, createHash, scrypt as derive, timingSafeEqual } from 'crypto';
+import type { IncomingMessage, ServerResponse } from 'http';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { CLIENT } from './copa-replays';
+const scrypt = (password: string, salt: string) => new Promise<Buffer>((resolve, reject) => {
+	derive(password, salt, 64, { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 }, (error, value) => {
+		if (error)
+			reject(error);
+		else
+			resolve(value);
+	});
+});
+const DAY = 86400000;
+const registryKey = 'copa-accounts/v1/registry.json';
+const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+const secret = () => randomBytes(32).toString('base64url');
+interface Account {
+	name: string;
+	password: string | null;
+	disabled?: boolean;
+}
+interface Session {
+	id: string;
+	expires: number;
+}
+interface Grant extends Session {
+	session: string;
+}
+interface Registry {
+	version: 1;
+	accounts: Record<string, Account>;
+	sessions: Record<string, Session>;
+	grants: Record<string, Grant>;
+	recoveries: Record<string, Session>;
+}
+export interface AccountStore {
+	read(): Promise<{
+		value: Registry,
+		etag?: string,
+	}>;
+	write(value: Registry, etag?: string): Promise<void>;
+}
+export class AccountError extends Error {
+	status: number;
+	constructor(status: number, message: string) { super(message); this.status = status; }
+}
+export function emptyRegistry(): Registry {
+	return { version: 1,
+		accounts: { riquelme: { name: 'Riquelme', password: null } },
+		sessions: {}, grants: {}, recoveries: {} };
+}
+let store: AccountStore | undefined;
+function storage(): AccountStore {
+	if (store)
+		return store;
+	const {
+		R2_ENDPOINT: endpoint, R2_BUCKET: bucket,
+		R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey,
+	} = process.env;
+	if (!endpoint || !bucket || !accessKeyId || !secretAccessKey)
+		throw new AccountError(503, 'Contas temporariamente indisponíveis.');
+	const client = new S3Client({ region: 'auto', endpoint,
+		credentials: { accessKeyId, secretAccessKey }, forcePathStyle: true });
+	return (store = {
+		async read() {
+			try {
+				const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: registryKey }));
+				if (!result.Body || (result.ContentLength || 0) > 2 * 1024 * 1024)
+					throw new Error('Invalid account registry');
+				const body = await result.Body.transformToString();
+				if (Buffer.byteLength(body) > 2 * 1024 * 1024)
+					throw new Error('Invalid account registry');
+				const value = JSON.parse(body);
+				if (value.version !== 1 || !value.accounts || !value.sessions || !value.grants || !value.recoveries || !result.ETag)
+					throw new Error('Invalid account registry');
+				return { value, etag: result.ETag };
+			} catch (error: any) {
+				if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404)
+					return { value: emptyRegistry() };
+				throw new AccountError(503, 'Contas temporariamente indisponíveis.');
+			}
+		},
+		async write(value, etag) {
+			await client.send(new PutObjectCommand({ Bucket: bucket, Key: registryKey, Body: JSON.stringify(value),
+				ContentType: 'application/json', ...(etag ? { IfMatch: etag } : { IfNoneMatch: '*' }) }));
+		},
+	});
+}
+function nameOf(value: unknown) {
+	if (typeof value !== 'string' ||
+		!/^[a-zA-Z0-9 ]{1,18}$/.test(value.trim()) ||
+		!/[a-zA-Z]/.test(value) ||
+		/^guest/i.test(value))
+		throw new AccountError(400, 'Nickname inválido.');
+	const name = value.trim().replace(/ +/g, ' ');
+	const id = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+	if (['__proto__', 'constructor', 'prototype'].includes(id))
+		throw new AccountError(400, 'Nickname inválido.');
+	return { name, id };
+}
+let deriving = 0;
+async function passwordHash(password: unknown, salt = randomBytes(16).toString('hex')) {
+	if (typeof password !== 'string' || password.length < 10 || password.length > 128)
+		throw new AccountError(400, 'Use uma senha exclusiva da Copa Rinha com 10 a 128 caracteres.');
+	if (deriving >= 2)
+		throw new AccountError(429, 'Muitas tentativas. Aguarde.');
+	deriving++;
+	try {
+		const value = await scrypt(password, salt);
+		return `scrypt$32768$8$3$${salt}$${value.toString('hex')}`;
+	} finally {
+		deriving--;
+	}
+}
+async function matches(password: unknown, stored: string | null) {
+	const salt = stored?.split('$')[4] || '00000000000000000000000000000000';
+	const candidate = await passwordHash(password, salt);
+	const expected = stored || 'x'.repeat(candidate.length);
+	return expected.length === candidate.length && timingSafeEqual(Buffer.from(candidate), Buffer.from(expected));
+}
+export class CopaAccounts {
+	private source?: AccountStore;
+	private now: () => number;
+	constructor(source?: AccountStore, now = () => Date.now()) { this.source = source; this.now = now; }
+	private read() { return (this.source || storage()).read(); }
+	private async change<T>(operation: (value: Registry) => T): Promise<T> {
+		for (let attempt = 0; attempt < 6; attempt++) {
+			const { value, etag } = await this.read();
+			const now = this.now();
+			for (const table of [value.sessions, value.grants, value.recoveries]) {
+				for (const [id, session] of Object.entries(table))
+					if (session.expires <= now)
+						delete table[id];
+			}
+			const result = operation(value);
+			if (Buffer.byteLength(JSON.stringify(value)) > 2 * 1024 * 1024)
+				throw new AccountError(503, 'Registro de contas cheio.');
+			try {
+				await (this.source || storage()).write(value, etag);
+				return result;
+			} catch (error: any) {
+				if (![409, 412].includes(error.$metadata?.httpStatusCode))
+					throw new AccountError(503, 'Contas temporariamente indisponíveis.');
+			}
+		}
+		throw new AccountError(409, 'Outra alteração está em andamento. Tente novamente.');
+	}
+	private session(value: Registry, token: unknown) {
+		if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token))
+			throw new AccountError(401, 'Sessão inválida ou expirada.');
+		const session = value.sessions[hash(token)];
+		if (!session ||
+			session.expires <= this.now() ||
+			!value.accounts[session.id]?.password ||
+			value.accounts[session.id].disabled)
+			throw new AccountError(401, 'Sessão inválida ou expirada.');
+		return session;
+	}
+	private issue(value: Registry, id: string) {
+		if (Object.keys(value.sessions).length >= 4096)
+			throw new AccountError(429, 'Limite de sessões atingido.');
+		const token = secret(), expires = this.now() + 30 * DAY;
+		value.sessions[hash(token)] = { id, expires };
+		return { name: value.accounts[id].name, token, expires };
+	}
+	async authenticate(action: string, name: unknown, password: unknown) {
+		const user = nameOf(name);
+		if (global.Users?.isTrusted(user.id as ID))
+			throw new AccountError(403, 'Nome protegido pelo servidor oficial.');
+		if (action === 'register') {
+			if (global.Users?.getExact(user.id)?.connected) throw new AccountError(409, 'Nickname em uso.');
+			const encoded = await passwordHash(password);
+			return this.change(value => {
+				if (Object.hasOwn(value.accounts, user.id))
+					throw new AccountError(409, 'Nickname registrado ou reservado.');
+				if (Object.keys(value.accounts).length >= 1000)
+					throw new AccountError(503, 'Limite de contas atingido.');
+				value.accounts[user.id] = { name: user.name, password: encoded };
+				return this.issue(value, user.id);
+			});
+		}
+		const { value } = await this.read();
+		const account = Object.hasOwn(value.accounts, user.id) ? value.accounts[user.id] : undefined;
+		if (!await matches(password, account?.password || null) || !account || account.disabled)
+			throw new AccountError(401, 'Nickname ou senha incorretos.');
+		const expected = account.password;
+		return this.change(current => {
+			if (current.accounts[user.id]?.password !== expected || current.accounts[user.id].disabled)
+				throw new AccountError(401, 'Nickname ou senha incorretos.');
+			return this.issue(current, user.id);
+		});
+	}
+	async grant(token: unknown, challenge: unknown) {
+		if (typeof challenge !== 'string' || !/^\d+\|[a-f0-9]{256}$/i.test(challenge))
+			throw new AccountError(400, 'Conexão inválida.');
+		return this.change(value => {
+			const session = this.session(value, token);
+			value.grants[hash(challenge.split('|')[1])] = {
+				...session, expires: this.now() + 30000,
+				session: hash(token as string) };
+			return { name: value.accounts[session.id].name, expires: session.expires };
+		});
+	}
+	async consume(challenge: string, id: string) {
+		return this.change(value => {
+			const grant = value.grants[hash(challenge)];
+			if (!grant ||
+				grant.id !== id ||
+				grant.expires <= this.now() ||
+				!value.sessions[grant.session] ||
+				value.sessions[grant.session].expires <= this.now() ||
+				value.accounts[id]?.disabled)
+				throw new AccountError(401, 'Identificação local inválida.');
+			delete value.grants[hash(challenge)];
+			return { id, session: grant.session, expires: value.sessions[grant.session].expires };
+		});
+	}
+	async protectedName(id: string) { return Object.hasOwn((await this.read()).value.accounts, id); }
+	async logout(token: unknown) {
+		const result = await this.change(value => {
+			this.session(value, token);
+			const session = hash(token as string);
+			delete value.sessions[session];
+			for (const [id, grant] of Object.entries(value.grants))
+				if (grant.session === session)
+					delete value.grants[id];
+			return { success: true };
+		});
+		revokeLive(undefined, hash(token as string));
+		return result;
+	}
+	async validSessions() { return (await this.read()).value; }
+	async admin(action: string, names: unknown) {
+		if (action === 'list') {
+			const { value } = await this.read();
+			return { accounts: Object.entries(value.accounts).map(([id, account]) => ({
+				id, name: account.name,
+				registered: !!account.password, disabled: !!account.disabled,
+				sessions: Object.values(value.sessions)
+					.filter(session => session.id === id && session.expires > this.now()).length })) };
+		}
+		if (!Array.isArray(names) || !names.length || names.length > 100)
+			throw new AccountError(400, 'Informe de 1 a 100 nicknames.');
+		const users = names.map(nameOf);
+		const recovery = secret();
+		const result = await this.change(value => {
+			for (const user of users) {
+				const account = Object.hasOwn(value.accounts, user.id) ? value.accounts[user.id] : undefined;
+				if (action === 'reserve') {
+					if (!account)
+						value.accounts[user.id] = { name: user.name, password: null };
+				} else if (action === 'release') {
+					if (account?.password)
+						throw new AccountError(409, 'Contas registradas são permanentes. Use desativar.');
+					delete value.accounts[user.id];
+				} else if (action === 'disable' || action === 'enable') {
+					if (!account)
+						throw new AccountError(404, 'Conta não encontrada.');
+					account.disabled = action === 'disable';
+				} else if (action === 'recover' && users.length === 1 && account) {
+					for (const [key, session] of Object.entries(value.recoveries))
+						if (session.id === user.id)
+							delete value.recoveries[key];
+					value.recoveries[hash(recovery)] = { id: user.id, expires: this.now() + DAY };
+					account.disabled = true;
+				} else
+					throw new AccountError(400, 'Ação inválida.');
+				if (action === 'disable' || action === 'recover') {
+					for (const [key, session] of Object.entries(value.sessions))
+						if (session.id === user.id)
+							delete value.sessions[key];
+				}
+			}
+			return action === 'recover' ? { recovery, expires: this.now() + DAY } : { success: true };
+		});
+		if (action === 'disable' || action === 'recover') for (const user of users) revokeLive(user.id);
+		return result;
+	}
+	async recover(token: unknown, password: unknown) {
+		if (typeof token !== 'string')
+			throw new AccountError(401, 'Recuperação inválida.');
+		const encoded = await passwordHash(password);
+		return this.change(value => {
+			const recovery = value.recoveries[hash(token)];
+			if (!recovery || recovery.expires <= this.now())
+				throw new AccountError(401, 'Recuperação inválida.');
+			delete value.recoveries[hash(token)];
+			const account = value.accounts[recovery.id];
+			account.password = encoded;
+			account.disabled = false;
+			for (const [key, session] of Object.entries(value.sessions))
+				if (session.id === recovery.id)
+					delete value.sessions[key];
+			return this.issue(value, recovery.id);
+		});
+	}
+}
+function revokeLive(id?: string, sessionHash?: string) {
+	if (!global.Users) return;
+	for (const connection of Users.connections.values()) {
+		const proof = connection.copaSession;
+		if (proof && (!id || proof.id === id) && (!sessionHash || proof.session === sessionHash)) connection.destroy();
+	}
+}
+export const copaAccounts = new CopaAccounts();
+const rates = new Map<string, {
+	count: number,
+	reset: number,
+}>();
+function allow(key: string, max: number) {
+	const now = Date.now();
+	for (const [id, entry] of rates)
+		if (entry.reset <= now)
+			rates.delete(id);
+	const entry = rates.get(key);
+	if (!entry) {
+		if (rates.size >= 10000)
+			return false;
+		rates.set(key, { count: 1, reset: now + 15 * 60000 });
+		return true;
+	}
+	return ++entry.count <= max;
+}
+export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, service = copaAccounts): boolean {
+	const path = (req.url || '').split('?')[0];
+	if (!path.startsWith('/copa-rinha/accounts/'))
+		return false;
+	res.setHeader('Cache-Control', 'no-store');
+	res.setHeader('Content-Type', 'application/json');
+	res.setHeader('X-Content-Type-Options', 'nosniff');
+	res.setHeader('Referrer-Policy', 'no-referrer');
+	res.setHeader('Vary', 'Origin');
+	const origin = req.headers.origin;
+	const allowed = origin === CLIENT ||
+		origin === `https://${String(req.headers.host)}` ||
+		(!!origin && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) && !process.env.RENDER);
+	if (allowed && origin)
+		res.setHeader('Access-Control-Allow-Origin', origin);
+	if (req.method === 'OPTIONS' && allowed) {
+		res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+		res.setHeader('Access-Control-Allow-Methods', 'POST');
+		res.statusCode = 204;
+		res.end();
+		return true;
+	}
+	const reply = (status: number, value: unknown) => { res.statusCode = status; res.end(JSON.stringify(value)); };
+	if (!Config.copaRinhaSingleFormat ||
+		!allowed ||
+		req.method !== 'POST' ||
+		!(req.headers['content-type'] ||
+			'').startsWith('application/json')) {
+		reply(403, { error: 'Solicitação não permitida.' });
+		return true;
+	}
+	let body = '', oversized = false;
+	req.on('data', chunk => {
+		if (!oversized) {
+			body += chunk;
+			if (Buffer.byteLength(body) > 8192) {
+				oversized = true;
+				body = '';
+			}
+		}
+	});
+	req.on('end', () => {
+		void (async () => {
+			try {
+				if (oversized)
+					throw new AccountError(413, 'Solicitação muito grande.');
+				if (!allow(`ip:${req.socket.remoteAddress || ''}`, 120))
+					throw new AccountError(429, 'Muitas solicitações. Aguarde 15 minutos.');
+				let data;
+				try { data = JSON.parse(body); } catch { throw new AccountError(400, 'Solicitação inválida.'); }
+				if (!data || typeof data !== 'object' || Array.isArray(data)) throw new AccountError(400, 'Solicitação inválida.');
+				const action = path.slice('/copa-rinha/accounts/'.length);
+				const token = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined;
+				let result;
+				if (action === 'admin') {
+					const key = process.env.COPA_RINHA_ADMIN_KEY;
+					if (!key || key.length < 43 || !token || !timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(token))))
+						throw new AccountError(403, 'Acesso administrativo negado.');
+					result = await service.admin(data.action, data.names);
+				} else if (action === 'grant')
+					result = await service.grant(token, data.challenge);
+				else if (action === 'logout')
+					result = await service.logout(token);
+				else if (action === 'recover')
+					result = await service.recover(data.recovery, data.password);
+				else if (action === 'login' || action === 'register') {
+					const { id } = nameOf(data.name);
+					if (!allow(`account:${id}`, 10) || !allow(`auth:${req.socket.remoteAddress || ''}`, 30))
+						throw new AccountError(429, 'Muitas tentativas. Aguarde 15 minutos.');
+					result = await service.authenticate(action, data.name, data.password);
+				} else
+					throw new AccountError(404, 'Operação desconhecida.');
+				reply(200, result);
+			} catch (error) {
+				reply(error instanceof AccountError ? error.status : 503, {
+					error: error instanceof AccountError ? error.message : 'Contas temporariamente indisponíveis.' });
+			}
+		})();
+	});
+	return true;
+}
