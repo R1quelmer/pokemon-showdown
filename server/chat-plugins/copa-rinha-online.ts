@@ -16,10 +16,10 @@ function publicBattle(user: User) {
 async function memberPresence() {
 	try {
 		const accounts = await copaAccounts.publicMembers();
-		return accounts.map(({ id, name, avatar }) => {
+		return accounts.map(({ id, name, avatar, partner }) => {
 			const user = Users.getExact(id);
 			if (!user?.connected || !user.named || !user.connections.some(connection => connection.hasCopaSession(user))) {
-				return { name, avatar, online: false, rooms: [] };
+				return { name, avatar, ...(partner && { partner }), online: false, rooms: [] };
 			}
 			const rooms: string[] = [];
 			for (const roomid of user.inRooms) {
@@ -29,7 +29,7 @@ async function memberPresence() {
 				}
 			}
 			return {
-				name, avatar: user.avatar, online: true, battle: publicBattle(user), rooms: rooms.sort(),
+				name, avatar: user.avatar, ...(partner && { partner }), online: true, battle: publicBattle(user), rooms: rooms.sort(),
 			};
 		}).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
 	} catch {

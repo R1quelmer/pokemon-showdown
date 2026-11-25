@@ -2,6 +2,7 @@
 import { randomBytes, createHash, scrypt as derive, timingSafeEqual } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { Dex } from '../sim/dex';
 import { CLIENT } from './copa-replays';
 const scrypt = (password: string, salt: string) => new Promise<Buffer>((resolve, reject) => {
 	derive(password, salt, 64, { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 }, (error, value) => {
@@ -15,13 +16,15 @@ const DAY = 86400000;
 const registryKey = 'copa-accounts/v1/registry.json';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
+interface Partner { species: string; shiny: boolean }
 interface Account {
 	name: string;
 	password: string | null;
 	disabled?: boolean;
 	avatar?: string;
+	partner?: Partner;
 }
-interface PublicMember { id: ID; name: string; avatar: string }
+interface PublicMember { id: ID; name: string; avatar: string; partner?: Partner }
 interface Session {
 	id: string;
 	expires: number;
@@ -154,7 +157,9 @@ export class CopaAccounts {
 		if (this.memberCache && this.memberCache.expires > this.now()) return this.memberCache.result;
 		const result = this.read().then(({ value }) => Object.entries(value.accounts)
 			.filter(([, account]) => account.password && !account.disabled)
-			.map(([id, account]) => ({ id: id as ID, name: account.name, avatar: account.avatar || 'unknown' })));
+			.map(([id, account]) => ({
+				id: id as ID, name: account.name, avatar: account.avatar || 'unknown', partner: account.partner,
+			})));
 		this.memberCache = { expires: this.now() + 30000, result };
 		return result;
 	}
@@ -169,6 +174,28 @@ export class CopaAccounts {
 			account.avatar = avatar;
 		}, true);
 	}
+	async setPartner(token: unknown, input: unknown) {
+		let partner: Partner | undefined;
+		if (input !== null) {
+			const data = input as Partial<Partner> | undefined;
+			if (typeof data?.species !== 'string' || !/^[a-z0-9]{1,32}$/.test(data.species) || typeof data.shiny !== 'boolean') {
+				throw new AccountError(400, 'Pokémon parceiro inválido.');
+			}
+			const species = Dex.mod('coparinha').species.get(data.species);
+			if (!species.exists || species.id !== data.species || species.num <= 0 || species.isNonstandard === 'CAP' ||
+				species.isNonstandard === 'Custom' || species.tags?.includes('Pokestar')) {
+				throw new AccountError(400, 'Escolha uma espécie ou forma do National Dex.');
+			}
+			partner = { species: species.id, shiny: data.shiny };
+		}
+		return this.change(value => {
+			const session = this.session(value, token);
+			const account = value.accounts[session.id];
+			account.partner = partner;
+			return { partner: account.partner || null };
+		}, true);
+	}
+
 	private session(value: Registry, token: unknown) {
 		if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token))
 			throw new AccountError(401, 'Sessão inválida ou expirada.');
@@ -410,6 +437,12 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 					result = await service.admin(data.action, data.names);
 				} else if (action === 'grant')
 					result = await service.grant(token, data.challenge);
+				else if (action === 'profile') {
+					const { id } = nameOf(data.name);
+					const member = (await service.publicMembers()).find(entry => entry.id === id);
+					result = { member: member || null };
+				} else if (action === 'partner')
+					result = await service.setPartner(token, data.partner);
 				else if (action === 'logout')
 					result = await service.logout(token);
 				else if (action === 'recover')

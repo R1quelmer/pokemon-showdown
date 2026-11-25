@@ -47,6 +47,9 @@ describe('Copa private accounts', () => {
 			await user.rename('Zeta Member', 'copa', false, connection);
 			await Chat.parse('/avatar cynthia', null, user, connection);
 			assert.equal(store.value().accounts.zetamember.avatar, 'cynthia');
+			const partner = { species: 'greninjamega', shiny: true };
+			await copaAccounts.setPartner(account.token, partner);
+			assert.deepEqual(store.value().accounts.zetamember.partner, partner);
 			assert.equal(user.avatar, 'cynthia');
 			user.joinRoom(lobby.roomid, connection);
 			Rooms.rooms.set(publicBattle, { battle: { ended: false }, settings: {} });
@@ -61,7 +64,7 @@ describe('Copa private accounts', () => {
 			assert.equal(reads - startingReads, 1);
 			assert.deepEqual(result, [
 				{ name: 'Alpha Member', avatar: 'unknown', online: false, rooms: [] },
-				{ name: 'Zeta Member', avatar: 'cynthia', online: true, rooms: [lobby.title], battle: publicBattle },
+				{ name: 'Zeta Member', avatar: 'cynthia', partner, online: true, rooms: [lobby.title], battle: publicBattle },
 			]);
 			Rooms.get(publicBattle).settings.isPrivate = true;
 			assert.equal((await query())[1].battle, undefined);
@@ -69,7 +72,7 @@ describe('Copa private accounts', () => {
 			user.games.clear();
 			user.inRooms.delete(privateRoom);
 			user.disconnectAll();
-			assert.deepEqual((await query())[1], { name: 'Zeta Member', avatar: 'cynthia', online: false, rooms: [] });
+			assert.deepEqual((await query())[1], { name: 'Zeta Member', avatar: 'cynthia', partner, online: false, rooms: [] });
 			const reconnect = guest.connections[0];
 			reconnect.challenge = 'b'.repeat(256);
 			await copaAccounts.grant(account.token, '4|' + reconnect.challenge);
@@ -194,7 +197,17 @@ describe('Copa private accounts', () => {
 			}
 
 			const unicode = { name: 'Copa UTF8', password: 'senha-copa-única-🚀-928' };
-			assert.equal((await request('register', unicode, undefined, true)).status, 200);
+			const registration = await request('register', unicode, undefined, true);
+			assert.equal(registration.status, 200);
+			const auth = 'Bearer ' + registration.body.token;
+			const partner = { species: 'rotomwash', shiny: true };
+			assert.equal((await request('partner', { partner })).status, 401);
+			assert.equal((await request('partner', { partner: { species: 'notapokemon', shiny: false } }, auth)).status, 400);
+			assert.equal((await request('partner', { partner }, auth)).status, 200);
+			assert.deepEqual((await request('profile', { name: 'Copa UTF8' })).body.member,
+				{ id: 'copautf8', name: 'Copa UTF8', avatar: 'unknown', partner });
+			assert.equal((await request('partner', { partner: null }, auth)).status, 200);
+			assert.equal((await request('profile', { name: 'Copa UTF8' })).body.member.partner, undefined);
 			assert.equal((await request('login', unicode)).status, 200, 'UTF-8 survives chunk boundaries');
 			for (let i = 0; i < 11; i++) {
 				const response = await request('login', { name: 'HTTP QA', password: 'wrong-password-value' });
