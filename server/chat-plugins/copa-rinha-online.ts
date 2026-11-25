@@ -5,6 +5,7 @@ interface PublicOnlineUser {
 	avatar: string | number;
 	status: string;
 	statusType: 'online' | 'busy' | 'idle';
+	inBattle: boolean;
 }
 
 export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
@@ -21,7 +22,11 @@ export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
 				continue;
 			}
 			// Match the public userdetails fields, never serialize a User or Connection.
-			users.push({ name: user.name, avatar: user.avatar, status: user.getStatus(), statusType: user.statusType });
+			const inBattle = [...user.games].some(id => {
+				const room = Rooms.get(id);
+				return !!room?.battle && !room.battle.ended;
+			});
+			users.push({ name: user.name, avatar: user.avatar, status: user.getStatus(), statusType: user.statusType, inBattle });
 		}
 		users.sort((a, b) => a.name.localeCompare(b.name));
 		return { total: users.length + guests, guests, users };

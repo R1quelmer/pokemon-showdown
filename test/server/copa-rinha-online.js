@@ -82,7 +82,7 @@ describe('Copa Rinha public online presence', () => {
 		user.avatar = 'copa-public-avatar'; user.userMessage = 'Pronto para jogar'; user.statusType = 'busy';
 		const result = query(), row = result.users.find(entry => entry.name === user.name);
 		assert.deepEqual(Object.keys(result).sort(), ['guests', 'total', 'users']);
-		assert.deepEqual(Object.keys(row).sort(), ['avatar', 'name', 'status', 'statusType']);
+		assert.deepEqual(Object.keys(row).sort(), ['avatar', 'inBattle', 'name', 'status', 'statusType']);
 		assert.equal(row.avatar, 'copa-public-avatar'); assert.equal(row.statusType, 'busy');
 		assert.equal(row.status, '!(Busy) Pronto para jogar');
 		const serialized = JSON.stringify(result);
@@ -92,6 +92,18 @@ describe('Copa Rinha public online presence', () => {
 		}
 		user.statusType = 'idle'; user.userMessage = '';
 		assert.equal(query().users.find(entry => entry.name === user.name).status, '!(Idle) ');
+	});
+	it('reports an active battle without exposing its room, opponents or private settings', () => {
+		const user = create('CopaRosterBattle'), roomid = 'battle-presence-private';
+		Rooms.rooms.set(roomid, { battle: { ended: false }, settings: { isPrivate: true } });
+		user.games.add(roomid);
+		try {
+			const row = query().users.find(entry => entry.name === user.name);
+			assert.equal(row.inBattle, true);
+			assert(!JSON.stringify(row).includes(roomid));
+			Rooms.get(roomid).battle.ended = true;
+			assert.equal(query().users.find(entry => entry.name === user.name).inBattle, false);
+		} finally { user.games.delete(roomid); Rooms.rooms.delete(roomid); }
 	});
 	it('is additive to native /cmd and honors the existing emergency trust gate', () => {
 		Chat.loadPlugins();
