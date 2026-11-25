@@ -600,6 +600,7 @@ export const commands: Chat.ChatCommands = {
 			user.settings.allowLadderBots = true;
 			this.sendReply(this.TL`You have opted in to matching against bots on the ladder.`);
 		}
+		Ladders.updateCopaBotPreference(user);
 		return user.update();
 	},
 	allowbotshelp: [
@@ -1489,7 +1490,8 @@ export const commands: Chat.ChatCommands = {
 				return false;
 			}
 			const ladder = Ladders(target);
-			if (!user.registered && Config.forceregisterelo && await ladder.getRating(user.id) >= Config.forceregisterelo) {
+			if (!user.registered && !connection.hasCopaSession(user) && Config.forceregisterelo &&
+				await ladder.getRating(user.id) >= Config.forceregisterelo) {
 				user.send(
 					Utils.html`|popup||html|${this.TL`Since you have reached ${Config.forceregisterelo} ELO in ${target}, you must register your account to continue playing that format on ladder.`}<p style="text-align: center"><button name="register" value="${user.id}"><b>${this.TL`Register`}</b></button></p>`
 				);

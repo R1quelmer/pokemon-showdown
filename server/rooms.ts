@@ -1380,7 +1380,7 @@ export class GlobalRoomState {
 		let count = 0;
 		const out = Monitor.logPath('battles.jsonl.progress').createAppendStream();
 		for (const room of Rooms.rooms.values()) {
-			if (!room.battle || room.battle.ended) continue;
+			if (!room.battle || room.battle.ended || room.battle.isTraining) continue;
 			room.battle.frozen = true;
 			room.battle.timer.stop();
 			const b = await this.serializeBattleRoom(room);
@@ -2225,9 +2225,7 @@ export const Rooms = {
 			throw new Error(`Players can't battle themselves`);
 		}
 
-		for (const user of players) {
-			Ladders.cancelSearches(user);
-		}
+		if (!options.trainingTeam) for (const user of players) Ladders.cancelSearches(user);
 
 		const isBestOf = Dex.formats.getRuleTable(format).valueRules.get('bestof');
 
@@ -2246,9 +2244,9 @@ export const Rooms = {
 			return null;
 		}
 
-		const p1Special = players.length ? players[0].battleSettings.special : undefined;
+		const p1Special = options.trainingTeam ? undefined : players[0]?.battleSettings.special;
 		let mismatch = `"${p1Special!}"`;
-		for (const user of players) {
+		for (const user of options.trainingTeam ? [] : players) {
 			if (user.battleSettings.special !== p1Special) {
 				mismatch += ` vs. "${user.battleSettings.special!}"`;
 			}

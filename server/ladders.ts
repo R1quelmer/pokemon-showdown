@@ -8,7 +8,8 @@
  * @license MIT
  */
 
-import { playerFormatAllowed, COPA_ONLY_MESSAGE, clientFormatID } from './copa-format-policy';
+import { playerFormatAllowed, COPA_ONLY_MESSAGE, clientFormatID, COPA_FORMAT } from './copa-format-policy';
+import { randomTrainingTeam } from './copa-training-teams';
 import { LadderStore as RemoteLadderStore } from './ladders-remote';
 import { LadderStore as LocalLadderStore } from './ladders-local';
 
@@ -18,6 +19,8 @@ const LadderStore: typeof RemoteLadderStore = (
 
 const SECONDS = 1000;
 const PERIODIC_MATCH_INTERVAL = 60 * SECONDS;
+const COPA_BOT_DELAY = 10 * SECONDS;
+const MAX_CONCURRENT_TRAINING = 3;
 
 import type { ChallengeType } from './room-battle';
 import { BattleReady, BattleChallenge, GameChallenge, BattleInvite, challenges } from './ladders-challenges';
@@ -46,11 +49,27 @@ export interface VirtualFormat {
 /**
  * Keys are formatids
  */
-const searches = new Map<string, {
-	playerCount: number,
+interface SearchTable {
+	playerCount: number;
 	/** userid:BattleReady */
-	searches: Map<ID, BattleReady>,
-}>();
+	searches: Map<ID, BattleReady>;
+}
+const searches = new Map<string, SearchTable>();
+const pendingCopaSearches = new WeakMap<User, object>();
+const copaBotTimers = new Map<BattleReady, NodeJS.Timeout>();
+
+function removeSearch(table: SearchTable, userid: ID) {
+	const search = table.searches.get(userid);
+	if (!search) return false;
+	clearTimeout(copaBotTimers.get(search));
+	copaBotTimers.delete(search);
+	return table.searches.delete(userid);
+}
+
+function isCopaPlayer(user: User) {
+	return user.named && !user.isUserBot &&
+		(user.registered || user.connections.some(connection => connection.hasCopaSession(user)));
+}
 
 /**
  * This keeps track of searches for battles, creating a new battle for a newly
@@ -73,6 +92,9 @@ class Ladder extends LadderStore {
 		// all validation for a battle goes through here
 		const user = connection.user;
 		const userid = user.id;
+		const copaSearch = Config.copaRinhaSingleFormat && this.formatid === COPA_FORMAT &&
+			(challengeType === 'rated' || challengeType === 'unrated');
+		const settingsAtSearch = copaSearch ? { ...user.battleSettings } : null;
 		if (team === null) team = user.battleSettings.team;
 
 		if (!playerFormatAllowed(this.formatid)) {
@@ -184,9 +206,11 @@ class Ladder extends LadderStore {
 			return null;
 		}
 
-		const settings = { ...user.battleSettings, team: valResult.slice(1) };
-		user.battleSettings.inviteOnly = false;
-		user.battleSettings.hidden = false;
+		const settings = { ...(settingsAtSearch || user.battleSettings), team: valResult.slice(1) };
+		if (!copaSearch) {
+			user.battleSettings.inviteOnly = false;
+			user.battleSettings.hidden = false;
+		}
 		return new BattleReady(userid, this.formatid, settings, rating, challengeType, this.virtualCustom);
 	}
 
@@ -277,24 +301,21 @@ class Ladder extends LadderStore {
 
 	cancelSearch(user: User) {
 		const formatid = toID(this.formatid);
+		const pending = formatid === COPA_FORMAT && pendingCopaSearches.delete(user);
 
 		const formatTable = Ladders.searches.get(formatid);
-		if (!formatTable) return false;
-		if (!formatTable.searches.has(user.id)) return false;
-		formatTable.searches.delete(user.id);
+		const removed = formatTable && removeSearch(formatTable, user.id);
+		if (!pending && !removed) return false;
 
 		Ladder.updateSearch(user);
 		return true;
 	}
 
 	static cancelSearches(user: User) {
-		let cancelCount = 0;
+		let cancelCount = pendingCopaSearches.delete(user) ? 1 : 0;
 
 		for (const formatTable of Ladders.searches.values()) {
-			const search = formatTable.searches.get(user.id);
-			if (!search) continue;
-			formatTable.searches.delete(user.id);
-			cancelCount++;
+			if (removeSearch(formatTable, user.id)) cancelCount++;
 		}
 
 		Ladder.updateSearch(user);
@@ -306,7 +327,7 @@ class Ladder extends LadderStore {
 		const user = Users.get(search.userid);
 		if (!user?.connected || user.id !== search.userid) {
 			const formatTable = Ladders.searches.get(formatid);
-			if (formatTable) formatTable.searches.delete(search.userid);
+			if (formatTable) removeSearch(formatTable, search.userid);
 			if (user?.connected) {
 				user.popup(`You changed your name and are no longer looking for a battle in ${formatid}`);
 				Ladder.updateSearch(user);
@@ -370,14 +391,25 @@ class Ladder extends LadderStore {
 		}
 
 		const oldUserid = user.id;
-		const search = await this.prepBattle(
-			connection, format.rated ? 'rated' : 'unrated', null, format.rated !== false
-		);
-
-		if (oldUserid !== user.id) return;
-		if (!search) return;
-
-		this.addSearch(search, user);
+		const copa = Config.copaRinhaSingleFormat && format.id === COPA_FORMAT;
+		if (copa && (pendingCopaSearches.has(user) || this.hasSearch(user))) return;
+		const pending = {};
+		if (copa) pendingCopaSearches.set(user, pending);
+		try {
+			const search = await this.prepBattle(
+				connection, format.rated ? 'rated' : 'unrated', null, format.rated !== false
+			);
+			if (!search || oldUserid !== user.id) return;
+			if (copa && (pendingCopaSearches.get(user) !== pending || !user.connected ||
+				connection.user !== user || !user.connections.includes(connection))) return;
+			if (copa) {
+				user.battleSettings.inviteOnly = false;
+				user.battleSettings.hidden = false;
+			}
+			this.addSearch(search, user);
+		} finally {
+			if (pendingCopaSearches.get(user) === pending) pendingCopaSearches.delete(user);
+		}
 	}
 
 	/**
@@ -390,6 +422,8 @@ class Ladder extends LadderStore {
 
 		// users must be different
 		if (new Set(users).size !== users.length) return false;
+		// The Copa training bot only enters after the human queue has been checked.
+		if (Config.copaRinhaSingleFormat && formatid === COPA_FORMAT && users.some(user => user.isUserBot)) return false;
 
 		if (Config.noipchecks) {
 			users[0].lastMatch = users[1].id;
@@ -398,7 +432,8 @@ class Ladder extends LadderStore {
 		}
 
 		// users must have different IPs
-		if (new Set(users.map(user => user.latestIp)).size !== users.length) return false;
+		if (new Set(users.map(user => user.latestIp)).size !== users.length &&
+			!(Config.copaRinhaSingleFormat && formatid === COPA_FORMAT && users.every(isCopaPlayer))) return false;
 
 		// users must not have been matched immediately previously
 		for (const user of users) {
@@ -454,9 +489,17 @@ class Ladder extends LadderStore {
 			return;
 		}
 
+		if (this.tryMatchSearch(newSearch, user, formatTable)) return;
+		formatTable.searches.set(newSearch.userid, newSearch);
+		Ladder.updateSearch(user);
+		if (Config.copaRinhaSingleFormat && formatid === COPA_FORMAT) Ladder.updateCopaBotPreference(user);
+	}
+
+	private tryMatchSearch(newSearch: BattleReady, user: User, formatTable: SearchTable) {
 		const matches = [newSearch];
 		// In order from longest waiting to shortest waiting
 		for (const search of formatTable.searches.values()) {
+			if (search === newSearch) continue;
 			const searcher = this.getSearcher(search);
 			if (!searcher) continue;
 			const matched = this.matchmakingOK([[search, searcher], [newSearch, user]]);
@@ -464,14 +507,61 @@ class Ladder extends LadderStore {
 				matches.push(search);
 			}
 			if (matches.length >= formatTable.playerCount) {
-				for (const matchedSearch of matches) formatTable.searches.delete(matchedSearch.userid);
+				for (const matchedSearch of matches) removeSearch(formatTable, matchedSearch.userid);
 				Ladder.match(matches);
-				return;
+				return true;
 			}
 		}
 
-		formatTable.searches.set(newSearch.userid, newSearch);
-		Ladder.updateSearch(user);
+		return false;
+	}
+
+	static updateCopaBotPreference(user: User) {
+		if (!Config.copaRinhaSingleFormat) return;
+		const search = Ladders.searches.get(COPA_FORMAT)?.searches.get(user.id);
+		if (!search) return;
+		if (!user.settings.allowLadderBots) {
+			clearTimeout(copaBotTimers.get(search));
+			copaBotTimers.delete(search);
+		} else if (!copaBotTimers.has(search) && user.named && !user.isUserBot) {
+			Ladder.scheduleCopaBot(search, Math.max(0, search.time + COPA_BOT_DELAY - Date.now()));
+		}
+	}
+
+	private static scheduleCopaBot(search: BattleReady, delay: number) {
+		const timer = setTimeout(() => {
+			if (copaBotTimers.get(search) !== timer) return;
+			copaBotTimers.delete(search);
+			const table = Ladders.searches.get(COPA_FORMAT);
+			if (!Config.copaRinhaSingleFormat || table?.searches.get(search.userid) !== search) return;
+			const ladder = Ladders(COPA_FORMAT);
+			const user = ladder.getSearcher(search);
+			if (!user?.settings.allowLadderBots || !user.named || user.isUserBot) return;
+			if (Punishments.isBattleBanned(user)) {
+				ladder.cancelSearch(user);
+				return;
+			}
+			if (ladder.tryMatchSearch(search, user, table)) return;
+			if (!isCopaPlayer(user)) return;
+			const active = [...Rooms.rooms.values()].filter(room => room.battle?.isTraining && !room.battle.ended);
+			if (active.length >= MAX_CONCURRENT_TRAINING || active.some(room => room.battle?.playerTable[user.id])) {
+				Ladder.scheduleCopaBot(search, COPA_BOT_DELAY);
+				return;
+			}
+			try {
+				const room = Rooms.createBattle({
+					format: COPA_FORMAT, players: [{ user, team: search.settings.team }], trainingTeam: randomTrainingTeam(),
+					challengeType: 'training', rated: false, allowRenames: false, isPrivate: 'hidden',
+				});
+				if (!room) return;
+				removeSearch(table, user.id);
+				Ladder.updateSearch(user);
+			} catch (error) {
+				Monitor.crashlog(error as Error, 'Copa training matchmaking');
+			}
+		}, delay);
+		timer.unref();
+		copaBotTimers.set(search, timer);
 	}
 
 	/**
@@ -498,8 +588,8 @@ class Ladder extends LadderStore {
 				const [longestSearch, longestSearcher] = longest;
 				const matched = matchmaker.matchmakingOK([[search, searcher], [longestSearch, longestSearcher]]);
 				if (matched) {
-					formatTable.searches.delete(search.userid);
-					formatTable.searches.delete(longestSearch.userid);
+					removeSearch(formatTable, search.userid);
+					removeSearch(formatTable, longestSearch.userid);
 					Ladder.match([longestSearch, search]);
 					return;
 				}
@@ -536,10 +626,14 @@ class Ladder extends LadderStore {
 		}
 		const format = Dex.formats.get(formatid);
 		const delayedStart = format.playerCount > players.length ? 'multi' : false;
+		// A shared household or ingress address must never be used to trade ladder points.
+		const sharedCopaAddress = Config.copaRinhaSingleFormat && formatid === COPA_FORMAT &&
+			['rated', 'unrated'].includes(readies[0].challengeType) &&
+			new Set(players.map(player => player.user.latestIp)).size !== players.length;
 		return Rooms.createBattle({
 			format: formatid,
 			players,
-			rated: minRating,
+			rated: sharedCopaAddress ? 0 : minRating,
 			challengeType: readies[0].challengeType,
 			delayedStart,
 		});
@@ -565,6 +659,7 @@ export const Ladders = Object.assign(getLadder, {
 	BattleInvite,
 
 	cancelSearches: Ladder.cancelSearches,
+	updateCopaBotPreference: Ladder.updateCopaBotPreference,
 	updateSearch: Ladder.updateSearch,
 	acceptChallenge: Ladder.acceptChallenge,
 	visualizeAll: Ladder.visualizeAll,

@@ -15,6 +15,8 @@ import { saveBattle } from './copa-replays';
 import { execSync } from "child_process";
 import { ProcessManager, type Streams } from '../lib';
 import { BattleStream } from "../sim/battle-stream";
+import { extractChannelMessages } from '../sim/battle';
+import { CopaTrainingAI } from './copa-training-ai';
 import { RoomGamePlayer, RoomGame } from "./room-game";
 import * as ConfigLoader from './config-loader';
 import type { Tournament } from './tournaments/index';
@@ -25,7 +27,8 @@ import type { LadderRating } from './ladders';
 
 type ChannelIndex = 0 | 1 | 2 | 3 | 4;
 export type PlayerIndex = 1 | 2 | 3 | 4;
-export type ChallengeType = 'rated' | 'unrated' | 'challenge' | 'tour';
+export type ChallengeType = 'rated' | 'unrated' | 'challenge' | 'tour' | 'training';
+const TRAINING_OPPONENT = 'Treinador [BOT]';
 
 interface BattleRequestTracker {
 	rqid: number;
@@ -473,6 +476,7 @@ export interface RoomBattlePlayerOptions {
 
 export interface RoomBattleOptions {
 	format: string;
+	trainingTeam?: string;
 	/**
 	 * length should be equal to the format's playerCount, except in two
 	 * special cases:
@@ -542,6 +546,10 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	rqid = 1;
 	requestCount = 0;
 	options: RoomBattleOptions;
+	readonly isTraining: boolean;
+	private trainingAI?: CopaTrainingAI;
+	private trainingFallback = false;
+	private trainingDisconnectTimer?: NodeJS.Timeout;
 	frozen?: boolean;
 	dataResolvers?: [((args: string[]) => void), ((error: Error) => void)][];
 	constructor(room: GameRoom, options: RoomBattleOptions) {
@@ -549,6 +557,8 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		const format = Dex.formats.get(options.format, true);
 		this.title = format.name;
 		this.options = options;
+		this.isTraining = !!options.trainingTeam;
+		if (this.isTraining) this.trainingAI = new CopaTrainingAI();
 		if (!this.title.endsWith(" Battle")) this.title += " Battle";
 		this.allowRenames = options.allowRenames !== undefined ? !!options.allowRenames : (!options.rated && !options.tour);
 
@@ -591,6 +601,14 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 			const p = options.players[i];
 			const player = this.addPlayer(p?.user || null, p || null);
 			if (!player) throw new Error(`failed to create player ${i + 1} in ${room.roomid}`);
+			if (i === 1 && options.trainingTeam) {
+				player.name = TRAINING_OPPONENT;
+				player.active = true;
+				player.hasTeam = true;
+				void this.stream.write(`>player p2 ${JSON.stringify({
+					name: player.name, avatar: 'scientist', team: options.trainingTeam,
+				})}`);
+			}
 		}
 		if (options.inputLog) {
 			let scanIndex = 0;
@@ -605,7 +623,7 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 			}
 		}
 		this.timer = new RoomBattleTimer(this);
-		if (Config.forcetimer || this.format.includes('blitz')) this.timer.start();
+		if (this.isTraining || Config.forcetimer || this.format.includes('blitz')) this.timer.start();
 		this.start();
 	}
 
@@ -661,6 +679,10 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		void this.stream.write(`>${player.slot} undo`);
 	}
 	override joinGame(user: User, slot?: SideID, playerOpts?: { team?: string }) {
+		if (this.isTraining) {
+			user.popup('O treino tem um jogador e um bot.');
+			return false;
+		}
 		if (user.id in this.playerTable) {
 			user.popup(`You have already joined this battle.`);
 			return false;
@@ -716,6 +738,7 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	}
 	override leaveGame(user: User) {
 		if (!user) return false; // ...
+		if (this.isTraining) return this.forfeit(user, ' encerrou o treino.');
 		if (this.room.rated || this.room.tour) {
 			user.popup(`Players can't be swapped out in a ${this.room.tour ? "tournament" : "rated"} battle.`);
 			return false;
@@ -759,6 +782,9 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		}
 	}
 	override setEnded() {
+		if (this.trainingDisconnectTimer) clearTimeout(this.trainingDisconnectTimer);
+		this.trainingDisconnectTimer = undefined;
+		this.trainingAI = undefined;
 		this.started = true;
 		for (const player of this.players) {
 			player.request = { rqid: 0, request: '', isWait: 'cantUndo', choice: '' };
@@ -778,6 +804,7 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 			break;
 
 		case 'update':
+			this.trainingAI?.observe(extractChannelMessages(lines.slice(1).join('\n'), [0])[0]);
 			for (const line of lines.slice(1)) {
 				if (line.startsWith('|turn|')) {
 					this.turn = parseInt(line.slice(6));
@@ -794,6 +821,15 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		case 'sideupdate': {
 			const slot = lines[1] as SideID;
 			const player = this[slot];
+			if (slot === 'p2' && this.trainingAI && lines[2].startsWith('|error|')) {
+				if (!this.trainingFallback) {
+					this.trainingFallback = true;
+					void this.stream.write('>p2 default');
+				} else {
+					this.forfeitPlayer(this.p2, ' não conseguiu escolher uma jogada.');
+				}
+				break;
+			}
 			if (lines[2].startsWith(`|error|[Invalid choice] Can't do anything`)) {
 				// ... should not happen
 			} else if (lines[2].startsWith(`|error|[Invalid choice]`)) {
@@ -815,6 +851,21 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 				this.requestCount++;
 				player?.sendRoom(`|request|${requestJSON}`);
 				if (!request.update) this.timer.nextRequest(player);
+				if (slot === 'p2' && !request.update) this.trainingFallback = false;
+				if (slot === 'p2' && this.trainingAI && !request.wait && !this.trainingFallback) {
+					let choice;
+					try {
+						choice = this.trainingAI.choose(request);
+					} catch (error) {
+						Monitor.crashlog(error as Error, 'Copa training choice');
+						choice = 'default';
+					}
+					if (choice) {
+						player.request.isWait = true;
+						player.request.choice = choice;
+						void this.stream.write(`>p2 ${choice}`);
+					}
+				}
 				break;
 			}
 			player?.sendRoom(lines[2]);
@@ -851,10 +902,10 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		// Check if the battle was rated to update the ladder, return its response, and log the battle.
 		if (winnerid === this.p1.id) {
 			p1score = 1;
-		} else if (winnerid === this.p2.id) {
+		} else if (winnerid === (this.isTraining ? toID(this.p2.name) : this.p2.id)) {
 			p1score = 0;
 		}
-		Chat.runHandlers('onBattleEnd', this, winnerid, this.players.map(p => p.id));
+		if (!this.isTraining) Chat.runHandlers('onBattleEnd', this, winnerid, this.players.map(p => p.id));
 		if (this.room.rated && !this.options.isBestOfSubBattle) {
 			void this.updateLadder(p1score, winnerid);
 		} else if (Config.logchallenges) {
@@ -1011,6 +1062,8 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	override onJoin(user: User) {
 		const player = this.playerTable[user.id];
 		if (player && !player.active) {
+			if (this.trainingDisconnectTimer) clearTimeout(this.trainingDisconnectTimer);
+			this.trainingDisconnectTimer = undefined;
 			player.active = true;
 			this.timer.checkActivity();
 			this.room.add(`|player|${player.slot}|${user.name}|${user.avatar}|`);
@@ -1024,6 +1077,13 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 			player.active = false;
 			this.timer.checkActivity();
 			this.room.add(`|player|${player.slot}|`);
+			if (this.isTraining && !this.ended) {
+				this.trainingDisconnectTimer = setTimeout(() => {
+					this.trainingDisconnectTimer = undefined;
+					if (!player.active) this.forfeitPlayer(player, ' abandonou o treino.');
+				}, 60_000);
+				this.trainingDisconnectTimer.unref();
+			}
 		}
 	}
 
@@ -1220,13 +1280,13 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		const delayStart = this.options.delayedStart || !!this.options.inputLog;
 		const users = this.players.map(player => {
 			const user = player.getUser();
-			if (!user && !delayStart) {
+			if (!user && !delayStart && !this.isTraining) {
 				throw new Error(`User ${player.id} not found on ${this.roomid} battle creation`);
 			}
 			return user;
 		});
 		if (!delayStart) {
-			Rooms.global.onCreateBattleRoom(users as User[], this.room, { rated: this.rated });
+			if (!this.isTraining) Rooms.global.onCreateBattleRoom(users as User[], this.room, { rated: this.rated });
 			this.started = true;
 		} else if (delayStart === 'multi') {
 			this.room.add(`|uhtml|invites|<div class="broadcast broadcast-blue"><strong>This is a 4-player challenge battle</strong><br />The players will need to add more players before the battle can start.</div>`);
