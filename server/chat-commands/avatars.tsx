@@ -8,6 +8,9 @@
 
 import { FS, Net } from "../../lib";
 import { copaAccounts } from '../copa-accounts';
+import { CLIENT as COPA_CLIENT } from '../copa-replays';
+
+const COPA_AVATAR = 'oguri-cap';
 
 const AVATARS_FILE = 'config/avatars.json';
 
@@ -79,7 +82,7 @@ export const Avatars = new class {
 	}
 	canUse(userid: ID, avatar: string): AvatarID | null {
 		avatar = avatar.toLowerCase().replace(/[^a-z0-9-.#]+/g, '');
-		if (OFFICIAL_AVATARS.has(avatar)) return avatar;
+		if (OFFICIAL_AVATARS.has(avatar) || (Config.copaRinhaSingleFormat && avatar === COPA_AVATAR)) return avatar;
 
 		const customs = customAvatars[userid]?.allowed;
 		if (!customs) return null;
@@ -93,6 +96,9 @@ export const Avatars = new class {
 		saveCustomAvatars(instant);
 	}
 	src(avatar: AvatarID) {
+		if (Config.copaRinhaSingleFormat && avatar === COPA_AVATAR) {
+			return `${COPA_CLIENT}/assets/copa-rinha/avatars/${COPA_AVATAR}.png`;
+		}
 		if (avatar.includes('.')) return '';
 		const avatarUrl = avatar.startsWith('#') ? `trainers-custom/${avatar.slice(1)}.png` : `trainers/${avatar}.png`;
 		return `https://${Config.routes.client}/sprites/${avatarUrl}`;
@@ -102,7 +108,7 @@ export const Avatars = new class {
 			return FS(`config/avatars/${avatar}`).isFile();
 		}
 		if (!avatar.startsWith('#')) {
-			return OFFICIAL_AVATARS.has(avatar);
+			return OFFICIAL_AVATARS.has(avatar) || !!(Config.copaRinhaSingleFormat && avatar === COPA_AVATAR);
 		}
 		return Net(Avatars.src(avatar)).get().then(() => true).catch(() => false);
 	}
@@ -714,6 +720,7 @@ export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
 	copaavatars(target, user, trustable) {
 		if (!Config.copaRinhaSingleFormat || !trustable || !user.named || target.trim()) return null;
 		const names = new Set(OFFICIAL_AVATARS);
+		names.add(COPA_AVATAR);
 		for (const id of [user.id, ...user.previousIDs]) {
 			for (const avatar of customAvatars[id]?.allowed || []) {
 				if (avatar && Avatars.userCanUse(user, avatar) === avatar) names.add(avatar);

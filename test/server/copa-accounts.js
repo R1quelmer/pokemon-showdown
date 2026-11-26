@@ -175,6 +175,10 @@ describe('Copa private accounts', () => {
 			await user.rename('Zeta Member', 'copa', false, connection);
 			await Chat.parse('/avatar cynthia', null, user, connection);
 			assert.equal(store.value().accounts.zetamember.avatar, 'cynthia');
+			await Chat.parse('/avatar oguri-cap', null, user, connection);
+			assert.equal(store.value().accounts.zetamember.avatar, 'oguri-cap');
+			assert.equal(user.avatar, 'oguri-cap');
+			await Chat.parse('/avatar cynthia', null, user, connection);
 			const partner = { species: 'greninjamega', shiny: true };
 			await copaAccounts.setPartner(account.token, partner);
 			assert.deepEqual(store.value().accounts.zetamember.partner, partner);

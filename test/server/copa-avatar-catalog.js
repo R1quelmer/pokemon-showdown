@@ -14,12 +14,14 @@ describe('Copa avatar catalog', () => {
 			assert(catalog.length > 1000);
 			assert.equal(catalog.length, new Set(catalog).size);
 			for (const name of catalog) assert.equal(Avatars.userCanUse(user, name), name);
-			for (const name of ['acetrainer-gen3jp', 'marnie', '#catalog-special', 'local-costume.png']) {
+			for (const name of ['acetrainer-gen3jp', 'marnie', '#catalog-special', 'local-costume.png', 'oguri-cap']) {
 				assert(catalog.includes(name), name);
 			}
 			assert(!crqHandlers.copaavatars.call({}, '', other, true).includes('#catalog-special'));
 			assert.equal(crqHandlers.copaavatars.call({}, '', user, false), null);
+			assert.match(Avatars.src('oguri-cap'), /copa-rinha-client\.onrender\.com\/assets\/copa-rinha\/avatars\/oguri-cap\.png$/);
 			Config.copaRinhaSingleFormat = false;
+			assert.equal(Avatars.userCanUse(user, 'oguri-cap'), null);
 			assert.equal(crqHandlers.copaavatars.call({}, '', user, true), null);
 		} finally {
 			delete Avatars.avatars[user.id];
