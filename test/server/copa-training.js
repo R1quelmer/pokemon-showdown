@@ -334,6 +334,57 @@ describe('Copa training', () => {
 		}
 	});
 
+	it('lists public battles and only the requester’s private training, with separate counts', async () => {
+		const original = Config.copaRinhaSingleFormat;
+		Config.copaRinhaSingleFormat = true;
+		const [owner, other, viewer] = ['Trainer List Owner', 'Trainer List Other', 'Trainer List Viewer'].map(name => makeUser(name));
+		const team = playerTeam();
+		const rooms = [];
+		const training = user => {
+			const room = Rooms.createBattle({
+				format: COPA_FORMAT, players: [{ user, team }], trainingTeam: team, challengeType: 'training',
+				rated: false, isPrivate: 'hidden', allowRenames: false,
+			});
+			rooms.push(room);
+			return room;
+		};
+		try {
+			const own = training(owner), shared = training(other);
+			const pvp = Rooms.createBattle({
+				format: COPA_FORMAT, players: [{ user: owner, team }, { user: other, team }], rated: false,
+			});
+			rooms.push(pvp);
+			await until(() => rooms.every(room => room.battle.started));
+			const list = user => Chat.crqHandlers.copabattles.call({}, COPA_FORMAT, user, true);
+			assert(!list(viewer).rooms[own.roomid]);
+			assert(!list(viewer).rooms[shared.roomid]);
+			assert.deepEqual(list(owner).rooms[own.roomid], {
+				p1: owner.name, p2: 'Treinador [BOT]', training: true, private: true,
+			});
+			assert.deepEqual(list(owner).counts, { publicCount: 1, privateTrainingCount: 1 });
+			await Chat.parse('/publicroom', shared, other, other.connections[0]);
+			assert.equal(shared.settings.isPrivate, false, 'a player can explicitly make their training public');
+			assert.deepEqual(list(viewer).rooms[shared.roomid], {
+				p1: other.name, p2: 'Treinador [BOT]', training: true, private: false,
+			});
+			assert.deepEqual(list(viewer).counts, { publicCount: 2, privateTrainingCount: 0 });
+			assert(!Rooms.global.getBattles(COPA_FORMAT)[own.roomid], 'native room list keeps its privacy semantics');
+			pvp.setPrivate('hidden');
+			assert(!list(owner).rooms[pvp.roomid], 'private human battles do not enter the directory');
+			owner.leaveRoom(own, owner.connections[0]);
+			assert(list(owner).rooms[own.roomid], 'private training remains discoverable during reconnect grace');
+			owner.joinRoom(own, owner.connections[0]);
+			assert(owner.inRooms.has(own.roomid));
+			own.battle.forfeit(owner);
+			await until(() => own.battle.ended);
+			assert(!list(owner).rooms[own.roomid]);
+		} finally {
+			for (const room of rooms) room.destroy();
+			for (const user of [owner, other, viewer]) { user.disconnectAll(); user.destroy(); }
+			Config.copaRinhaSingleFormat = original;
+		}
+	});
+
 	it('completes naturally without updating ladder rating', async () => {
 		const user = makeUser('Treino Completo');
 		const room = Rooms.createBattle({

@@ -82,6 +82,8 @@ interface BattleRoomTable {
 	p1?: string;
 	p2?: string;
 	minElo?: 'tour' | number;
+	training?: boolean;
+	private?: boolean;
 }
 
 interface UserTable {
@@ -1597,18 +1599,50 @@ export class GlobalRoomState {
 		}
 		return roomTable;
 	}
+	/** Copa's directory includes only public games and the requester's own private training. */
+	getCopaBattles(user: User, filter = '', countsOnly = false) {
+		const rooms: Record<string, BattleRoomTable> = {};
+		let publicCount = 0, privateTrainingCount = 0;
+		const [format, prefix] = filter.split(',').map(part => toID(part));
+		for (const room of Rooms.rooms.values()) {
+			const battle = room.battle;
+			if (room.type !== 'battle' || !battle?.started || battle.ended || !battle.p1?.name || !battle.p2?.name) continue;
+			let restricted = false;
+			for (let current: Room | null = room; current; current = current.parent) {
+				if (current.settings.isPrivate || current.settings.modjoin) {
+					restricted = true;
+					break;
+				}
+			}
+			if (restricted) {
+				if (!battle.isTraining || !user.games.has(room.roomid) || !battle.playerTable[user.id]) continue;
+				privateTrainingCount++;
+			} else {
+				publicCount++;
+			}
+			if (countsOnly || (format && format !== room.format)) continue;
+			if (prefix && !toID(battle.p1.name).startsWith(prefix) && !toID(battle.p2.name).startsWith(prefix)) continue;
+			rooms[room.roomid] = {
+				p1: battle.p1.name, p2: battle.p2.name, training: battle.isTraining, private: restricted,
+			};
+		}
+		return { rooms, counts: { publicCount, privateTrainingCount } };
+	}
+
 	getRooms(user: User) {
 		const roomsData: {
 			chat: ChatRoomTable[],
 			sectionTitles: string[],
 			userCount: number,
 			battleCount: number,
+			copaBattleCounts?: { publicCount: number, privateTrainingCount: number },
 		} = {
 			chat: [],
 			sectionTitles: Object.values(RoomSections.sectionNames),
 			userCount: Users.onlineCount,
 			battleCount: this.battleCount,
 		};
+		if (Config.copaRinhaSingleFormat) roomsData.copaBattleCounts = this.getCopaBattles(user, '', true).counts;
 		for (const room of this.chatRooms) {
 			if (!room) continue;
 			if (room.parent) continue;

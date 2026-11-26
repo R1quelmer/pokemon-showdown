@@ -76,6 +76,10 @@ export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
 		if (!trustable) return false;
 		return { rooms: Rooms.global.getBattles(target) };
 	},
+	copabattles(target, user, trustable) {
+		if (!trustable || !Config.copaRinhaSingleFormat) return false;
+		return Rooms.global.getCopaBattles(user, target);
+	},
 	rooms(target, user, trustable) {
 		if (!trustable) return false;
 		return Rooms.global.getRooms(user);

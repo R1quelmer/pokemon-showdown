@@ -46,7 +46,7 @@ interface PublicOnlineUser {
 }
 
 export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
-	copapresence(target, _requester, trustable) {
+	copapresence(target, requester, trustable) {
 		if (!trustable || !Config.copaRinhaSingleFormat) return false;
 		const users: PublicOnlineUser[] = [];
 		const seen = new Set<ID>();
@@ -63,7 +63,10 @@ export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
 			users.push({ name: user.name, avatar: user.avatar, status: user.getStatus(), statusType: user.statusType, inBattle });
 		}
 		users.sort((a, b) => a.name.localeCompare(b.name));
-		const snapshot = { total: users.length + guests, guests, users };
+		const snapshot = {
+			total: users.length + guests, guests, users,
+			copaBattleCounts: requester ? Rooms.global.getCopaBattles(requester, '', true).counts : undefined,
+		};
 		if (target === 'members') return memberPresence().then(members => ({ ...snapshot, members }));
 		return snapshot;
 	},
