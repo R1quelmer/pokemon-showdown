@@ -35,7 +35,7 @@ interface Account {
 	disabled?: boolean;
 	avatar?: string;
 	partner?: Partner;
-	nicknameColor?: NicknameColor;
+	nicknameColor?: string;
 	registeredAt?: string;
 	registrationDateRetroactive?: true;
 	trainerCard?: TrainerCard;
@@ -44,8 +44,18 @@ interface Account {
 	titles?: string[];
 	battleStats?: BattleStats;
 }
-const NICKNAME_COLORS = ['cyan', 'mint', 'pink', 'lilac', 'peach'] as const;
-type NicknameColor = typeof NICKNAME_COLORS[number];
+const LEGACY_NICKNAME_COLORS: Record<string, string> = {
+	cyan: '#75e5fb', mint: '#8cf0bd', pink: '#ffaacf', lilac: '#d0baff', peach: '#ffc4a5',
+};
+// Contrast is measured against the client nickname swatch, #101d30.
+function readableNicknameHex(hex: string) {
+	const channel = (offset: number) => {
+		const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+		return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+	};
+	return (0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5) + 0.05) /
+		0.062022890370193165 >= 4.5;
+}
 function publicNickname(account: Account) {
 	return {
 		nicknameColor: account.nicknameColor, badges: account.badges || [],
@@ -296,8 +306,16 @@ export class CopaAccounts {
 		}, true);
 	}
 	async setNicknameColor(token: unknown, choice: unknown) {
-		const color = NICKNAME_COLORS.find(entry => entry === choice);
-		if (choice !== null && !color) throw new AccountError(400, 'Cor de nickname inválida.');
+		if (typeof choice === 'string' && Object.hasOwn(LEGACY_NICKNAME_COLORS, choice)) {
+			choice = LEGACY_NICKNAME_COLORS[choice];
+		}
+		if (choice !== null && (typeof choice !== 'string' || !/^#[0-9a-f]{6}$/i.test(choice))) {
+			throw new AccountError(400, 'Informe uma cor HEX com seis dígitos.');
+		}
+		if (choice && !readableNicknameHex(choice)) {
+			throw new AccountError(400, 'Escolha uma cor mais clara para manter o contraste do nickname.');
+		}
+		const color = choice?.toLowerCase();
 		return this.change(value => {
 			const session = this.session(value, token);
 			const account = value.accounts[session.id];

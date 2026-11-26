@@ -24,9 +24,11 @@ describe('Copa private accounts', () => {
 		const service = new CopaAccounts(store);
 		const { token } = await service.authenticate('register', 'Color Trainer', password);
 		await assert.rejects(service.setNicknameColor(token, 'gold'), { status: 400 });
-		await assert.rejects(service.setNicknameColor('x'.repeat(43), 'mint'), { status: 401 });
-		await service.setNicknameColor(token, 'mint');
-		assert.equal((await new CopaAccounts(store).trainer('Color Trainer')).nicknameColor, 'mint');
+		await assert.rejects(service.setNicknameColor('x'.repeat(43), '#8cf0bd'), { status: 401 });
+		await assert.rejects(service.setNicknameColor(token, '#101d30'), { status: 400 });
+		await assert.rejects(service.setNicknameColor(token, '#fff;{}'), { status: 400 });
+		await service.setNicknameColor(token, '#8CF0BD');
+		assert.equal((await new CopaAccounts(store).trainer('Color Trainer')).nicknameColor, '#8cf0bd');
 		assert.equal((await service.publicMembers())[0].goldNickname, false);
 		await service.admin('save-trainer', 'Color Trainer', {
 			region: 'Kanto', dreamTeam: Array(6).fill(null), achievements: [], titles: [],
@@ -35,7 +37,7 @@ describe('Copa private accounts', () => {
 		assert.equal((await service.publicMembers())[0].goldNickname, true);
 		await service.admin('remove-badge', ['Color Trainer'], 'Kanto');
 		assert.equal((await service.publicMembers())[0].goldNickname, false);
-		assert.equal((await service.publicMembers())[0].nicknameColor, 'mint');
+		assert.equal((await service.publicMembers())[0].nicknameColor, '#8cf0bd');
 		await service.setNicknameColor(token, null);
 		assert.equal((await service.publicMembers())[0].nicknameColor, undefined);
 	});
