@@ -13,6 +13,7 @@ const scrypt = (password: string, salt: string) => new Promise<Buffer>((resolve,
 	});
 });
 const DAY = 86400000;
+const LEGACY_REGISTRATION_DATE = '2026-11-24T03:00:00.000Z';
 const registryKey = 'copa-accounts/v1/registry.json';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
@@ -33,6 +34,7 @@ interface Account {
 	avatar?: string;
 	partner?: Partner;
 	registeredAt?: string;
+	registrationDateRetroactive?: true;
 	trainerCard?: TrainerCard;
 	badges?: ProfileRegion[];
 	battleStats?: BattleStats;
@@ -176,7 +178,29 @@ export class CopaAccounts {
 	private now: () => number;
 	private memberCache?: { expires: number, result: Promise<PublicMember[]> };
 	constructor(source?: AccountStore, now = () => Date.now()) { this.source = source; this.now = now; }
-	private read() { return (this.source || storage()).read(); }
+	private async read() {
+		const source = this.source || storage();
+		for (let attempt = 0; attempt < 6; attempt++) {
+			const snapshot = await source.read();
+			const { value, etag } = snapshot;
+			const legacy = Object.values(value.accounts).filter(account => account.password && !account.registeredAt);
+			if (!legacy.length) return snapshot;
+			for (const account of legacy) {
+				account.registeredAt = LEGACY_REGISTRATION_DATE;
+				account.registrationDateRetroactive = true;
+			}
+			if (Buffer.byteLength(JSON.stringify(value)) > 2 * 1024 * 1024)
+				throw new AccountError(503, 'Registro de contas cheio.');
+			try {
+				await source.write(value, etag);
+			} catch (error: any) {
+				if (![409, 412].includes(error.$metadata?.httpStatusCode))
+					throw new AccountError(503, 'Contas temporariamente indisponíveis.');
+			}
+			// Reload the ETag before handing the migrated registry to a caller that may write it.
+		}
+		throw new AccountError(409, 'Outra alteração está em andamento. Tente novamente.');
+	}
 	private async change<T>(operation: (value: Registry) => T, changesMembers = false): Promise<T> {
 		for (let attempt = 0; attempt < 6; attempt++) {
 			const { value, etag } = await this.read();
@@ -425,6 +449,7 @@ export class CopaAccounts {
 				throw new AccountError(401, 'Recuperação inválida.');
 			delete value.recoveries[hash(token)];
 			const account = value.accounts[recovery.id];
+			if (!account.password) account.registeredAt = new Date(this.now()).toISOString();
 			account.password = encoded;
 			account.disabled = false;
 			for (const [key, session] of Object.entries(value.sessions))

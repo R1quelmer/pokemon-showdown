@@ -19,6 +19,32 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('persists retroactive registration dates and preserves all other account data', async () => {
+		const store = fixture();
+		const initial = await store.read();
+		initial.value.accounts.legacy = { name: 'Legacy', password: 'fixture', disabled: true,
+			avatar: 'cynthia', partner: { species: 'sylveon', shiny: false } };
+		initial.value.accounts.active = { name: 'Active', password: 'fixture' };
+		initial.value.accounts.dated = { name: 'Dated', password: 'fixture', registeredAt: '2026-11-25T20:00:00.000Z' };
+		initial.value.sessions.retained = { id: 'active', expires: 1 };
+		await store.write(initial.value, initial.etag);
+		const now = Date.parse('2026-11-26T15:00:00.000Z');
+		const service = new CopaAccounts(store, () => now);
+		assert.equal((await service.trainer('Active')).registeredAt, '2026-11-24T03:00:00.000Z');
+		for (const id of ['legacy', 'active']) {
+			Object.assign(initial.value.accounts[id], {
+				registeredAt: '2026-11-24T03:00:00.000Z', registrationDateRetroactive: true,
+			});
+		}
+		assert.deepEqual(store.value(), initial.value);
+		const migrated = await store.read();
+		await service.trainer('Active');
+		assert.equal((await store.read()).etag, migrated.etag);
+		await service.authenticate('register', 'Fresh Account', password);
+		assert.equal(store.value().accounts.freshaccount.registeredAt, new Date(now).toISOString());
+		assert.equal(store.value().accounts.freshaccount.registrationDateRetroactive, undefined);
+	});
+
 	it('validates trainer cards, separates badge permissions and persists observed results', async () => {
 		const store = fixture();
 		const service = new CopaAccounts(store);
