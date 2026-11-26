@@ -19,6 +19,27 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('persists nickname colors and derives gold from all ten regions', async () => {
+		const store = fixture();
+		const service = new CopaAccounts(store);
+		const { token } = await service.authenticate('register', 'Color Trainer', password);
+		await assert.rejects(service.setNicknameColor(token, 'gold'), { status: 400 });
+		await assert.rejects(service.setNicknameColor('x'.repeat(43), 'mint'), { status: 401 });
+		await service.setNicknameColor(token, 'mint');
+		assert.equal((await new CopaAccounts(store).trainer('Color Trainer')).nicknameColor, 'mint');
+		assert.equal((await service.publicMembers())[0].goldNickname, false);
+		await service.admin('save-trainer', 'Color Trainer', {
+			region: 'Kanto', dreamTeam: Array(6).fill(null), achievements: [], titles: [],
+			badges: ['Kanto','Johto','Hoenn','Sinnoh','Unova','Kalos','Alola','Galar','Hisui','Paldea'],
+		});
+		assert.equal((await service.publicMembers())[0].goldNickname, true);
+		await service.admin('remove-badge', ['Color Trainer'], 'Kanto');
+		assert.equal((await service.publicMembers())[0].goldNickname, false);
+		assert.equal((await service.publicMembers())[0].nicknameColor, 'mint');
+		await service.setNicknameColor(token, null);
+		assert.equal((await service.publicMembers())[0].nicknameColor, undefined);
+	});
+
 	it('lists selectable Hall of Fame species, regional forms and Megas from the Copa Dex', async () => {
 		const service = new CopaAccounts(fixture());
 		const { species } = await service.admin('trainer-species');
@@ -320,7 +341,7 @@ describe('Copa private accounts', () => {
 			assert.equal((await request('partner', { partner: { species: 'notapokemon', shiny: false } }, auth)).status, 400);
 			assert.equal((await request('partner', { partner }, auth)).status, 200);
 			assert.deepEqual((await request('profile', { name: 'Copa UTF8' })).body.member,
-				{ id: 'copautf8', name: 'Copa UTF8', avatar: 'unknown', partner });
+				{ id: 'copautf8', name: 'Copa UTF8', avatar: 'unknown', partner, badges: [], goldNickname: false });
 			assert.equal((await request('partner', { partner: null }, auth)).status, 200);
 			assert.equal((await request('profile', { name: 'Copa UTF8' })).body.member.partner, undefined);
 			assert.equal((await request('login', unicode)).status, 200, 'UTF-8 survives chunk boundaries');

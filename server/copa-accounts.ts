@@ -35,6 +35,7 @@ interface Account {
 	disabled?: boolean;
 	avatar?: string;
 	partner?: Partner;
+	nicknameColor?: NicknameColor;
 	registeredAt?: string;
 	registrationDateRetroactive?: true;
 	trainerCard?: TrainerCard;
@@ -43,7 +44,17 @@ interface Account {
 	titles?: string[];
 	battleStats?: BattleStats;
 }
-interface PublicMember { id: ID; name: string; avatar: string; partner?: Partner }
+const NICKNAME_COLORS = ['cyan', 'mint', 'pink', 'lilac', 'peach'] as const;
+type NicknameColor = typeof NICKNAME_COLORS[number];
+function publicNickname(account: Account) {
+	return {
+		nicknameColor: account.nicknameColor, badges: account.badges || [],
+		goldNickname: PROFILE_REGIONS.every(region => account.badges?.includes(region)),
+	};
+}
+interface PublicMember extends ReturnType<typeof publicNickname> {
+	id: ID; name: string; avatar: string; partner?: Partner;
+}
 interface Session {
 	id: string;
 	expires: number;
@@ -259,7 +270,7 @@ export class CopaAccounts {
 		const result = this.read().then(({ value }) => Object.entries(value.accounts)
 			.filter(([, account]) => account.password && !account.disabled)
 			.map(([id, account]) => ({
-				id: id as ID, name: account.name, avatar: account.avatar || 'unknown', partner: account.partner,
+				id: id as ID, name: account.name, avatar: account.avatar || 'unknown', partner: account.partner, ...publicNickname(account),
 			})));
 		this.memberCache = { expires: this.now() + 30000, result };
 		return result;
@@ -284,6 +295,16 @@ export class CopaAccounts {
 			return { partner: account.partner || null };
 		}, true);
 	}
+	async setNicknameColor(token: unknown, choice: unknown) {
+		const color = NICKNAME_COLORS.find(entry => entry === choice);
+		if (choice !== null && !color) throw new AccountError(400, 'Cor de nickname inválida.');
+		return this.change(value => {
+			const session = this.session(value, token);
+			const account = value.accounts[session.id];
+			account.nicknameColor = color;
+			return { nicknameColor: color || null };
+		}, true, false);
+	}
 	async trainer(name: unknown) {
 		const { id } = nameOf(name);
 		const { value } = await this.read();
@@ -291,8 +312,8 @@ export class CopaAccounts {
 		if (!account?.password || account.disabled) return null;
 		return {
 			name: account.name, avatar: account.avatar || 'unknown', partner: account.partner,
-			registeredAt: account.registeredAt, card: account.trainerCard,
-			badges: account.badges || [], achievements: account.achievements || [], titles: account.titles || [],
+			registeredAt: account.registeredAt, card: account.trainerCard, ...publicNickname(account),
+			achievements: account.achievements || [], titles: account.titles || [],
 			stats: account.battleStats,
 			online: global.Users?.getExact(id)?.connections.some(connection =>
 				connection.user && connection.hasCopaSession(connection.user)) || false,
@@ -351,7 +372,7 @@ export class CopaAccounts {
 			account.achievements = achievements;
 			account.titles = titles;
 			return { success: true };
-		}, false, false);
+		}, true, false);
 	}
 
 	async recordTrainerBattle(players: readonly { id: ID; account: ID | undefined }[], winner: ID) {
@@ -637,6 +658,8 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 					result = { member: member || null };
 				} else if (action === 'trainer') {
 					result = { trainer: await service.trainer(data.name) };
+				} else if (action === 'nickname-color') {
+					result = await service.setNicknameColor(token, data.color);
 				} else if (action === 'edit-trainer') {
 					result = await service.setTrainer(token, data.card);
 				} else if (action === 'partner')

@@ -13,28 +13,23 @@ function publicBattle(user: User) {
 	});
 }
 
-async function memberPresence() {
-	try {
-		const accounts = await copaAccounts.publicMembers();
-		return accounts.map(({ id, name, avatar, partner }) => {
-			const user = Users.getExact(id);
-			if (!user?.connected || !user.named || !user.connections.some(connection => connection.hasCopaSession(user))) {
-				return { name, avatar, ...(partner && { partner }), online: false, rooms: [] };
+function memberPresence(accounts: Awaited<ReturnType<typeof copaAccounts.publicMembers>>) {
+	return accounts.map(({ id, name, avatar, partner }) => {
+		const user = Users.getExact(id);
+		if (!user?.connected || !user.named || !user.connections.some(connection => connection.hasCopaSession(user))) {
+			return { name, avatar, ...(partner && { partner }), online: false, rooms: [] };
+		}
+		const rooms: string[] = [];
+		for (const roomid of user.inRooms) {
+			const room = Rooms.get(roomid);
+			if (room?.persist && room.type === 'chat' && !room.settings.isPersonal && isPublicRoom(room)) {
+				rooms.push(room.title);
 			}
-			const rooms: string[] = [];
-			for (const roomid of user.inRooms) {
-				const room = Rooms.get(roomid);
-				if (room?.persist && room.type === 'chat' && !room.settings.isPersonal && isPublicRoom(room)) {
-					rooms.push(room.title);
-				}
-			}
-			return {
-				name, avatar: user.avatar, ...(partner && { partner }), online: true, battle: publicBattle(user), rooms: rooms.sort(),
-			};
-		}).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
-	} catch {
-		return null;
-	}
+		}
+		return {
+			name, avatar: user.avatar, ...(partner && { partner }), online: true, battle: publicBattle(user), rooms: rooms.sort(),
+		};
+	}).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
 }
 
 interface PublicOnlineUser {
@@ -67,7 +62,13 @@ export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
 			total: users.length + guests, guests, users,
 			copaBattleCounts: requester ? Rooms.global.getCopaBattles(requester, '', true).counts : undefined,
 		};
-		if (target === 'members') return memberPresence().then(members => ({ ...snapshot, members }));
-		return snapshot;
+		if (target !== 'members' && target !== 'nicknames') return snapshot;
+		return copaAccounts.publicMembers().then(accounts => ({
+			...snapshot,
+			nicknames: accounts.filter(account => account.nicknameColor || account.badges.length).map(account => ({
+				id: account.id, color: account.nicknameColor, gold: account.goldNickname, badges: account.badges,
+			})),
+			...(target === 'members' && { members: memberPresence(accounts) }),
+		}), () => ({ ...snapshot, ...(target === 'members' && { members: null }) }));
 	},
 };
