@@ -72,14 +72,27 @@ describe('Copa private accounts', () => {
 		const service = new CopaAccounts(store);
 		const { token } = await service.authenticate('register', 'Trainer Card', password);
 		const card = {
-			bio: 'Meu Dream Team', region: 'Hisui', banner: '',
+			bio: 'Meu perfil', region: 'Hisui', banner: '',
 			dreamTeam: [{ species: 'greninjamega', shiny: true }, null, { species: 'rotomwash', shiny: false }, null, null, null],
 		};
 		await assert.rejects(service.setTrainer('x'.repeat(43), card), { status: 401 });
-		await assert.rejects(service.setTrainer(token, { ...card, dreamTeam: [{ species: 'sylveon', shiny: true }] }), { status: 400 });
 		await assert.rejects(service.setTrainer(token, { ...card, banner: 'data:image/svg+xml;base64,PHN2Zz4=' }), { status: 400 });
-		await assert.rejects(service.setTrainer(token, { ...card, region: 'Inexistente' }), { status: 400 });
-		await service.setTrainer(token, { ...card, badges: ['Kanto'], stats: { wins: 999 } });
+		const competition = {
+			region: 'Hisui', dreamTeam: [{ species: 'Greninja-Mega', shiny: true }, ...card.dreamTeam.slice(1)],
+			badges: ['Hisui'], achievements: ['Campeão'], titles: ['Mestre de Hisui'],
+		};
+		await assert.rejects(service.admin('save-trainer', 'Trainer Card', { ...competition, region: 'Inexistente' }), { status: 400 });
+		await assert.rejects(service.admin('save-trainer', 'Trainer Card', { ...competition, dreamTeam: [] }), { status: 400 });
+		await service.setTrainer(token, { bio: card.bio, banner: card.banner });
+		const before = structuredClone(store.value());
+		await service.admin('save-trainer', 'Trainer Card', competition);
+		const { profile: preview } = await service.admin('get-trainer', 'Trainer Card');
+		assert.deepEqual(preview, { ...competition, name: 'Trainer Card', dreamTeam: card.dreamTeam });
+		assert.equal(Object.hasOwn(preview, 'password'), false);
+		assert.deepEqual(store.value().sessions, before.sessions);
+		assert.equal(store.value().accounts.trainercard.password, before.accounts.trainercard.password);
+		await service.setTrainer(token, { ...card, region: 'Kanto', dreamTeam: Array(6).fill(null),
+			badges: ['Kanto'], titles: ['Não autorizado'], achievements: [], stats: { wins: 999 } });
 		await service.admin('award-badge', ['Trainer Card'], 'Hisui');
 		await service.admin('award-badge', ['Trainer Card'], 'Hisui');
 		await service.admin('award-badge', ['Trainer Card'], 'Paldea');
@@ -91,6 +104,8 @@ describe('Copa private accounts', () => {
 		const profile = await new CopaAccounts(store).trainer('trainercard');
 		assert.deepEqual(profile.card, card);
 		assert.deepEqual(profile.badges, ['Hisui']);
+		assert.deepEqual(profile.titles, competition.titles);
+		assert.deepEqual(profile.achievements, competition.achievements);
 		assert.deepEqual(profile.stats, { total: 3, wins: 1, losses: 1 });
 		assert.equal(typeof profile.registeredAt, 'string');
 		assert.equal(Object.hasOwn(profile, 'password'), false);
@@ -265,6 +280,9 @@ describe('Copa private accounts', () => {
 				action: 'award-badge', names: ['Riquelme'], regions: ['Kanto', 'Johto'],
 			})).status, 403);
 			assert.equal(denied.headers['Cache-Control'], 'no-store');
+			assert.equal((await request('admin', {
+				action: 'save-trainer', name: 'Riquelme', profile: {},
+			}, 'Bearer ' + 'B'.repeat(43))).status, 403);
 			const previousKey = process.env.COPA_RINHA_ADMIN_KEY;
 			process.env.COPA_RINHA_ADMIN_KEY = 'A'.repeat(43); // Synthetic test key, never used by a deployment.
 			try {

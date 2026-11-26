@@ -20,10 +20,12 @@ const secret = () => randomBytes(32).toString('base64url');
 interface Partner { species: string; shiny: boolean }
 export const PROFILE_REGIONS = ['Kanto', 'Johto', 'Hoenn', 'Sinnoh', 'Unova', 'Kalos', 'Alola', 'Galar', 'Hisui', 'Paldea'] as const;
 type ProfileRegion = typeof PROFILE_REGIONS[number];
-interface TrainerCard {
-	bio: string;
+interface TrainerCompetition {
 	region: ProfileRegion | '';
 	dreamTeam: (Partner | null)[];
+}
+interface TrainerCard extends TrainerCompetition {
+	bio: string;
 	banner: string;
 }
 interface BattleStats { total: number; wins: number; losses: number }
@@ -37,6 +39,8 @@ interface Account {
 	registrationDateRetroactive?: true;
 	trainerCard?: TrainerCard;
 	badges?: ProfileRegion[];
+	achievements?: string[];
+	titles?: string[];
 	battleStats?: BattleStats;
 }
 interface PublicMember { id: ID; name: string; avatar: string; partner?: Partner }
@@ -153,6 +157,14 @@ function profilePokemon(input: unknown): Partner {
 	}
 	return { species: species.id, shiny: data.shiny };
 }
+function trainerLabels(input: unknown): string[] {
+	if (!Array.isArray(input) || input.length > 12 || !input.every(label =>
+		typeof label === 'string' && label.trim() && label.length <= 80 && !/[\x00-\x1f\x7f]/.test(label))) {
+		throw new AccountError(400, 'Informe até 12 conquistas ou títulos de até 80 caracteres cada.');
+	}
+	return [...new Set(input.map(label => label.trim()))];
+}
+
 let deriving = 0;
 async function passwordHash(password: unknown, salt = randomBytes(16).toString('hex')) {
 	if (typeof password !== 'string' || password.length < 10 || password.length > 128)
@@ -262,29 +274,68 @@ export class CopaAccounts {
 		return {
 			name: account.name, avatar: account.avatar || 'unknown', partner: account.partner,
 			registeredAt: account.registeredAt, card: account.trainerCard,
-			badges: account.badges || [], stats: account.battleStats,
+			badges: account.badges || [], achievements: account.achievements || [], titles: account.titles || [],
+			stats: account.battleStats,
 			online: global.Users?.getExact(id)?.connections.some(connection =>
 				connection.user && connection.hasCopaSession(connection.user)) || false,
 		};
 	}
 	async setTrainer(token: unknown, input: unknown) {
-		const data = input as Partial<TrainerCard> | undefined;
-		if (typeof data?.bio !== 'string' || data.bio.length > 360 ||
-			(data.region !== '' && !isProfileRegion(data.region)) ||
-			!Array.isArray(data.dreamTeam) || data.dreamTeam.length !== 6 ||
-			!validTrainerBanner(data.banner)) {
+		const data = input as Pick<TrainerCard, 'bio' | 'banner'> | undefined;
+		if (typeof data?.bio !== 'string' || data.bio.length > 360 || !validTrainerBanner(data.banner)) {
 			throw new AccountError(400, 'Perfil inválido. Use uma imagem leve e até 360 caracteres na biografia.');
 		}
-		const card: TrainerCard = {
-			bio: data.bio.trim(), region: data.region, dreamTeam: data.dreamTeam.map(slot =>
-				slot === null ? null : profilePokemon(slot)), banner: data.banner,
-		};
 		return this.change(value => {
 			const session = this.session(value, token);
-			value.accounts[session.id].trainerCard = card;
+			const account = value.accounts[session.id];
+			const card: TrainerCard = {
+				region: account.trainerCard?.region || '', dreamTeam: account.trainerCard?.dreamTeam || Array(6).fill(null),
+				bio: data.bio.trim(), banner: data.banner,
+			};
+			account.trainerCard = card;
 			return { card };
-		});
+		}, false, false);
 	}
+	private async adminTrainer(action: string, name: unknown, input: unknown) {
+		const { id } = nameOf(name);
+		if (action === 'get-trainer') {
+			const { value } = await this.read();
+			const account = value.accounts[id];
+			if (!account?.password) throw new AccountError(404, 'Conta registrada não encontrada.');
+			return { profile: {
+				name: account.name, region: account.trainerCard?.region || '',
+				dreamTeam: account.trainerCard?.dreamTeam || Array(6).fill(null),
+				badges: account.badges || [], achievements: account.achievements || [], titles: account.titles || [],
+			} };
+		}
+		const data = input as (Partial<TrainerCompetition> & {
+			badges?: unknown; achievements?: unknown; titles?: unknown;
+		}) | undefined;
+		if (!data || (data.region !== '' && !isProfileRegion(data.region)) ||
+			!Array.isArray(data.dreamTeam) || data.dreamTeam.length !== 6 ||
+			!Array.isArray(data.badges) || data.badges.length > PROFILE_REGIONS.length || !data.badges.every(isProfileRegion)) {
+			throw new AccountError(400, 'Confira a região de origem, o Hall da Fama e as regiões concluídas.');
+		}
+		const region = data.region;
+		const dreamTeam = data.dreamTeam.map(slot => {
+			if (slot === null) return null;
+			const species = typeof slot?.species === 'string' && slot.species.length <= 48 ? toID(slot.species) : '';
+			return profilePokemon({ species, shiny: slot?.shiny });
+		});
+		const selected = new Set(data.badges);
+		const achievements = trainerLabels(data.achievements);
+		const titles = trainerLabels(data.titles);
+		return this.change(value => {
+			const account = value.accounts[id];
+			if (!account?.password) throw new AccountError(404, 'Conta registrada não encontrada.');
+			account.trainerCard = { bio: '', banner: '', ...account.trainerCard, region, dreamTeam };
+			account.badges = PROFILE_REGIONS.filter(item => selected.has(item));
+			account.achievements = achievements;
+			account.titles = titles;
+			return { success: true };
+		}, false, false);
+	}
+
 	async recordTrainerBattle(players: readonly { id: ID; account: ID | undefined }[], winner: ID) {
 		if (!players.some(player => player.account)) return;
 		await this.change(value => {
@@ -387,6 +438,7 @@ export class CopaAccounts {
 	}
 	async validSessions() { return (await this.read()).value; }
 	async admin(action: string, names: unknown, regions?: unknown) {
+		if (action === 'get-trainer' || action === 'save-trainer') return this.adminTrainer(action, names, regions);
 		if (action === 'list') {
 			const { value } = await this.read();
 			return { accounts: Object.entries(value.accounts).map(([id, account]) => ({
@@ -553,7 +605,11 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 					const key = process.env.COPA_RINHA_ADMIN_KEY;
 					if (!key || key.length < 43 || !token || !timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(token))))
 						throw new AccountError(403, 'Acesso administrativo negado.');
-					result = await service.admin(data.action, data.names, Object.hasOwn(data, 'regions') ? data.regions : data.region);
+					if (data.action === 'get-trainer' || data.action === 'save-trainer') {
+						result = await service.admin(data.action, data.name, data.profile);
+					} else {
+						result = await service.admin(data.action, data.names, Object.hasOwn(data, 'regions') ? data.regions : data.region);
+					}
 				} else if (action === 'grant')
 					result = await service.grant(token, data.challenge);
 				else if (action === 'profile') {
