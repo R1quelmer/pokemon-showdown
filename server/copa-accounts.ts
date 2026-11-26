@@ -201,11 +201,11 @@ export class CopaAccounts {
 		}
 		throw new AccountError(409, 'Outra alteração está em andamento. Tente novamente.');
 	}
-	private async change<T>(operation: (value: Registry) => T, changesMembers = false): Promise<T> {
+	private async change<T>(operation: (value: Registry) => T, changesMembers = false, pruneExpired = true): Promise<T> {
 		for (let attempt = 0; attempt < 6; attempt++) {
 			const { value, etag } = await this.read();
 			const now = this.now();
-			for (const table of [value.sessions, value.grants, value.recoveries]) {
+			for (const table of pruneExpired ? [value.sessions, value.grants, value.recoveries] : []) {
 				for (const [id, session] of Object.entries(table))
 					if (session.expires <= now)
 						delete table[id];
@@ -386,7 +386,7 @@ export class CopaAccounts {
 		return result;
 	}
 	async validSessions() { return (await this.read()).value; }
-	async admin(action: string, names: unknown, region?: unknown) {
+	async admin(action: string, names: unknown, regions?: unknown) {
 		if (action === 'list') {
 			const { value } = await this.read();
 			return { accounts: Object.entries(value.accounts).map(([id, account]) => ({
@@ -398,6 +398,12 @@ export class CopaAccounts {
 		if (!Array.isArray(names) || !names.length || names.length > 100)
 			throw new AccountError(400, 'Informe de 1 a 100 nicknames.');
 		const users = names.map(nameOf);
+		const badgeAction = action === 'award-badge' || action === 'remove-badge';
+		const selected = Array.isArray(regions) ? regions : [regions];
+		if (badgeAction && (!selected.length || selected.length > PROFILE_REGIONS.length ||
+			!selected.every(isProfileRegion))) {
+			throw new AccountError(400, 'Selecione uma ou mais regiões válidas.');
+		}
 		const recovery = secret();
 		const result = await this.change(value => {
 			for (const user of users) {
@@ -409,12 +415,13 @@ export class CopaAccounts {
 					if (account?.password)
 						throw new AccountError(409, 'Contas registradas são permanentes. Use desativar.');
 					delete value.accounts[user.id];
-				} else if (action === 'award-badge' || action === 'remove-badge') {
-					if (!isProfileRegion(region)) throw new AccountError(400, 'Selecione uma região.');
+				} else if (badgeAction) {
 					if (!account?.password) throw new AccountError(404, 'Conta registrada não encontrada.');
 					const badges = new Set(account.badges);
-					if (action === 'award-badge') badges.add(region);
-					else badges.delete(region);
+					for (const region of selected) {
+						if (action === 'award-badge') badges.add(region);
+						else badges.delete(region);
+					}
 					account.badges = PROFILE_REGIONS.filter(item => badges.has(item));
 				} else if (action === 'disable' || action === 'enable') {
 					if (!account)
@@ -435,7 +442,7 @@ export class CopaAccounts {
 				}
 			}
 			return action === 'recover' ? { recovery, expires: this.now() + DAY } : { success: true };
-		}, true);
+		}, true, !badgeAction);
 		if (action === 'disable' || action === 'recover') for (const user of users) revokeLive(user.id);
 		return result;
 	}
@@ -546,7 +553,7 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 					const key = process.env.COPA_RINHA_ADMIN_KEY;
 					if (!key || key.length < 43 || !token || !timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(token))))
 						throw new AccountError(403, 'Acesso administrativo negado.');
-					result = await service.admin(data.action, data.names, data.region);
+					result = await service.admin(data.action, data.names, Object.hasOwn(data, 'regions') ? data.regions : data.region);
 				} else if (action === 'grant')
 					result = await service.grant(token, data.challenge);
 				else if (action === 'profile') {

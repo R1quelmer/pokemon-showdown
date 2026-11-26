@@ -19,6 +19,28 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('updates selected badges for multiple accounts atomically and preserves account data', async () => {
+		const store = fixture();
+		const initial = await store.read();
+		const registeredAt = '2026-11-25T20:00:00.000Z';
+		initial.value.accounts.alpha = { name: 'Alpha', password: 'fixture', registeredAt,
+			badges: ['Hisui'], avatar: 'cynthia', partner: { species: 'sylveon', shiny: true } };
+		initial.value.accounts.beta = { name: 'Beta', password: 'fixture', registeredAt, badges: ['Paldea'] };
+		initial.value.sessions.retained = { id: 'alpha', expires: 1 };
+		await store.write(initial.value, initial.etag);
+		const service = new CopaAccounts(store);
+		await service.admin('award-badge', ['Alpha', 'Beta'], ['Johto', 'Kanto', 'Johto']);
+		assert.deepEqual(store.value().accounts.alpha.badges, ['Kanto', 'Johto', 'Hisui']);
+		assert.deepEqual(store.value().accounts.beta.badges, ['Kanto', 'Johto', 'Paldea']);
+		const before = await store.read();
+		await assert.rejects(service.admin('remove-badge', ['Alpha', 'Riquelme'], ['Kanto', 'Johto']), { status: 404 });
+		await assert.rejects(service.admin('award-badge', ['Alpha'], ['Hoenn', 'invalid']), { status: 400 });
+		await assert.rejects(service.admin('remove-badge', ['Alpha'], []), { status: 400 });
+		assert.deepEqual(await store.read(), before);
+		await service.admin('remove-badge', ['Alpha', 'Beta'], ['Kanto', 'Johto']);
+		assert.deepEqual(store.value(), initial.value);
+	});
+
 	it('persists retroactive registration dates and preserves all other account data', async () => {
 		const store = fixture();
 		const initial = await store.read();
@@ -239,12 +261,19 @@ describe('Copa private accounts', () => {
 		try {
 			const denied = await request('admin', { action: 'list' });
 			assert.equal(denied.status, 403);
+			assert.equal((await request('admin', {
+				action: 'award-badge', names: ['Riquelme'], regions: ['Kanto', 'Johto'],
+			})).status, 403);
 			assert.equal(denied.headers['Cache-Control'], 'no-store');
 			const previousKey = process.env.COPA_RINHA_ADMIN_KEY;
 			process.env.COPA_RINHA_ADMIN_KEY = 'A'.repeat(43); // Synthetic test key, never used by a deployment.
 			try {
 				const reserved = await request('admin', { action: 'reserve', names: ['HTTP Participant'] }, 'Bearer ' + 'A'.repeat(43));
 				assert.equal(reserved.status, 200);
+				const bulk = await request('admin', {
+					action: 'award-badge', names: ['HTTP Participant'], regions: ['Kanto', 'Johto'],
+				}, 'Bearer ' + 'A'.repeat(43));
+				assert.equal(bulk.status, 404); // Reached the batch handler with valid regions, but the nickname is unregistered.
 				const listed = await request('admin', { action: 'list' }, 'Bearer ' + 'A'.repeat(43));
 				assert(listed.body.accounts.some(account => account.name === 'HTTP Participant'));
 				assert(!JSON.stringify(listed.body).includes('password'));
