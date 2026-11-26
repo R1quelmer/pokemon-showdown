@@ -19,6 +19,16 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('lists selectable Hall of Fame species, regional forms and Megas from the Copa Dex', async () => {
+		const service = new CopaAccounts(fixture());
+		const { species } = await service.admin('trainer-species');
+		assert.equal(new Set(species.map(entry => entry.id)).size, species.length);
+		for (const id of ['pikachu', 'raichualola', 'rotomwash', 'greninjamega']) {
+			assert(species.some(entry => entry.id === id && entry.name && entry.sprite), id);
+		}
+		assert(!species.some(entry => entry.id === 'syclant'));
+	});
+
 	it('updates selected badges for multiple accounts atomically and preserves account data', async () => {
 		const store = fixture();
 		const initial = await store.read();

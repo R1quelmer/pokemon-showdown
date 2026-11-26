@@ -145,14 +145,32 @@ function validTrainerBanner(value: unknown): value is string {
 	}
 	return false;
 }
+function isTrainerSpecies(species: ReturnType<typeof Dex.species.get>) {
+	return species.exists && species.num > 0 && species.isNonstandard !== 'CAP' &&
+		species.isNonstandard !== 'Custom' && !species.tags?.includes('Pokestar');
+}
+let trainerSpeciesCatalog: { id: string; name: string; sprite: string }[] | undefined;
+function getTrainerSpeciesCatalog() {
+	if (trainerSpeciesCatalog) return trainerSpeciesCatalog;
+	const dex = Dex.mod('coparinha');
+	const entries = new Map<string, { id: string; name: string; sprite: string }>();
+	for (const base of dex.species.all()) {
+		for (const name of [base.name, ...base.cosmeticFormes || []]) {
+			const species = dex.species.get(name);
+			if (isTrainerSpecies(species)) {
+				entries.set(species.id, { id: species.id, name: species.name, sprite: species.spriteid });
+			}
+		}
+	}
+	return (trainerSpeciesCatalog = [...entries.values()].sort((a, b) => a.name.localeCompare(b.name)));
+}
 function profilePokemon(input: unknown): Partner {
 	const data = input as Partial<Partner> | undefined;
 	if (typeof data?.species !== 'string' || !/^[a-z0-9]{1,32}$/.test(data.species) || typeof data.shiny !== 'boolean') {
 		throw new AccountError(400, 'Pokémon inválido.');
 	}
 	const species = Dex.mod('coparinha').species.get(data.species);
-	if (!species.exists || species.id !== data.species || species.num <= 0 || species.isNonstandard === 'CAP' ||
-		species.isNonstandard === 'Custom' || species.tags?.includes('Pokestar')) {
+	if (!isTrainerSpecies(species) || species.id !== data.species) {
 		throw new AccountError(400, 'Escolha uma espécie ou forma do National Dex.');
 	}
 	return { species: species.id, shiny: data.shiny };
@@ -438,6 +456,7 @@ export class CopaAccounts {
 	}
 	async validSessions() { return (await this.read()).value; }
 	async admin(action: string, names: unknown, regions?: unknown) {
+		if (action === 'trainer-species') return { species: getTrainerSpeciesCatalog() };
 		if (action === 'get-trainer' || action === 'save-trainer') return this.adminTrainer(action, names, regions);
 		if (action === 'list') {
 			const { value } = await this.read();
