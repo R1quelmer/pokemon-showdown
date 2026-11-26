@@ -710,6 +710,19 @@ for (const avatar of OFFICIAL_AVATARS_WISTERIAPURPLE) OFFICIAL_AVATARS.add(avata
 for (const avatar of OFFICIAL_AVATARS_FLAMIBANE) OFFICIAL_AVATARS.add(avatar);
 for (const avatar of OFFICIAL_AVATARS_RADU) OFFICIAL_AVATARS.add(avatar);
 
+export const crqHandlers: { [k: string]: Chat.CRQHandler } = {
+	copaavatars(target, user, trustable) {
+		if (!Config.copaRinhaSingleFormat || !trustable || !user.named || target.trim()) return null;
+		const names = new Set(OFFICIAL_AVATARS);
+		for (const id of [user.id, ...user.previousIDs]) {
+			for (const avatar of customAvatars[id]?.allowed || []) {
+				if (avatar && Avatars.userCanUse(user, avatar) === avatar) names.add(avatar);
+			}
+		}
+		return [...names].sort();
+	},
+};
+
 export const commands: Chat.ChatCommands = {
 	async avatar(target, room, user, connection) {
 		if (!target) return this.parse(`${this.cmdToken}avatars`);
