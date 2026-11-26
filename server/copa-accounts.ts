@@ -17,12 +17,25 @@ const registryKey = 'copa-accounts/v1/registry.json';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
 interface Partner { species: string; shiny: boolean }
+export const PROFILE_REGIONS = ['Kanto', 'Johto', 'Hoenn', 'Sinnoh', 'Unova', 'Kalos', 'Alola', 'Galar', 'Hisui', 'Paldea'] as const;
+type ProfileRegion = typeof PROFILE_REGIONS[number];
+interface TrainerCard {
+	bio: string;
+	region: ProfileRegion | '';
+	dreamTeam: (Partner | null)[];
+	banner: string;
+}
+interface BattleStats { total: number; wins: number; losses: number }
 interface Account {
 	name: string;
 	password: string | null;
 	disabled?: boolean;
 	avatar?: string;
 	partner?: Partner;
+	registeredAt?: string;
+	trainerCard?: TrainerCard;
+	badges?: ProfileRegion[];
+	battleStats?: BattleStats;
 }
 interface PublicMember { id: ID; name: string; avatar: string; partner?: Partner }
 interface Session {
@@ -104,6 +117,40 @@ function nameOf(value: unknown) {
 		throw new AccountError(400, 'Nickname inválido.');
 	return { name, id };
 }
+function isProfileRegion(value: unknown): value is ProfileRegion {
+	return PROFILE_REGIONS.some(region => region === value);
+}
+function validTrainerBanner(value: unknown): value is string {
+	if (typeof value !== 'string' || value.length > 6800) return false;
+	if (!value) return true;
+	const match = /^data:image\/jpeg;base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+	if (!match) return false;
+	const bytes = Buffer.from(match[1], 'base64');
+	if (bytes.length < 16 || bytes.toString('base64') !== match[1] ||
+		bytes.readUInt16BE(0) !== 0xffd8 || bytes.readUInt16BE(bytes.length - 2) !== 0xffd9) return false;
+	for (let i = 2; i + 9 < bytes.length;) {
+		if (bytes[i] !== 0xff) return false;
+		const marker = bytes[i + 1], length = bytes.readUInt16BE(i + 2);
+		if (length < 2 || i + length + 2 > bytes.length) return false;
+		if (marker === 0xc0 || marker === 0xc2) {
+			return length >= 8 && bytes.readUInt16BE(i + 5) === 180 && bytes.readUInt16BE(i + 7) === 480;
+		}
+		i += length + 2;
+	}
+	return false;
+}
+function profilePokemon(input: unknown): Partner {
+	const data = input as Partial<Partner> | undefined;
+	if (typeof data?.species !== 'string' || !/^[a-z0-9]{1,32}$/.test(data.species) || typeof data.shiny !== 'boolean') {
+		throw new AccountError(400, 'Pokémon inválido.');
+	}
+	const species = Dex.mod('coparinha').species.get(data.species);
+	if (!species.exists || species.id !== data.species || species.num <= 0 || species.isNonstandard === 'CAP' ||
+		species.isNonstandard === 'Custom' || species.tags?.includes('Pokestar')) {
+		throw new AccountError(400, 'Escolha uma espécie ou forma do National Dex.');
+	}
+	return { species: species.id, shiny: data.shiny };
+}
 let deriving = 0;
 async function passwordHash(password: unknown, salt = randomBytes(16).toString('hex')) {
 	if (typeof password !== 'string' || password.length < 10 || password.length > 128)
@@ -175,25 +222,57 @@ export class CopaAccounts {
 		}, true);
 	}
 	async setPartner(token: unknown, input: unknown) {
-		let partner: Partner | undefined;
-		if (input !== null) {
-			const data = input as Partial<Partner> | undefined;
-			if (typeof data?.species !== 'string' || !/^[a-z0-9]{1,32}$/.test(data.species) || typeof data.shiny !== 'boolean') {
-				throw new AccountError(400, 'Pokémon parceiro inválido.');
-			}
-			const species = Dex.mod('coparinha').species.get(data.species);
-			if (!species.exists || species.id !== data.species || species.num <= 0 || species.isNonstandard === 'CAP' ||
-				species.isNonstandard === 'Custom' || species.tags?.includes('Pokestar')) {
-				throw new AccountError(400, 'Escolha uma espécie ou forma do National Dex.');
-			}
-			partner = { species: species.id, shiny: data.shiny };
-		}
+		const partner = input === null ? undefined : profilePokemon(input);
 		return this.change(value => {
 			const session = this.session(value, token);
 			const account = value.accounts[session.id];
 			account.partner = partner;
 			return { partner: account.partner || null };
 		}, true);
+	}
+	async trainer(name: unknown) {
+		const { id } = nameOf(name);
+		const { value } = await this.read();
+		const account = value.accounts[id];
+		if (!account?.password || account.disabled) return null;
+		return {
+			name: account.name, avatar: account.avatar || 'unknown', partner: account.partner,
+			registeredAt: account.registeredAt, card: account.trainerCard,
+			badges: account.badges || [], stats: account.battleStats,
+			online: global.Users?.getExact(id)?.connections.some(connection =>
+				connection.user && connection.hasCopaSession(connection.user)) || false,
+		};
+	}
+	async setTrainer(token: unknown, input: unknown) {
+		const data = input as Partial<TrainerCard> | undefined;
+		if (typeof data?.bio !== 'string' || data.bio.length > 360 ||
+			(data.region !== '' && !isProfileRegion(data.region)) ||
+			!Array.isArray(data.dreamTeam) || data.dreamTeam.length !== 6 ||
+			!validTrainerBanner(data.banner)) {
+			throw new AccountError(400, 'Perfil inválido. Use uma imagem leve e até 360 caracteres na biografia.');
+		}
+		const card: TrainerCard = {
+			bio: data.bio.trim(), region: data.region, dreamTeam: data.dreamTeam.map(slot =>
+				slot === null ? null : profilePokemon(slot)), banner: data.banner,
+		};
+		return this.change(value => {
+			const session = this.session(value, token);
+			value.accounts[session.id].trainerCard = card;
+			return { card };
+		});
+	}
+	async recordTrainerBattle(players: readonly { id: ID; account: ID | undefined }[], winner: ID) {
+		if (!players.some(player => player.account)) return;
+		await this.change(value => {
+			for (const player of players) {
+				const account = player.account && value.accounts[player.account];
+				if (!account || !account.password || account.disabled) continue;
+				const stats = account.battleStats ||= { total: 0, wins: 0, losses: 0 };
+				stats.total++;
+				if (winner === player.id) stats.wins++;
+				else if (winner) stats.losses++;
+			}
+		});
 	}
 
 	private session(value: Registry, token: unknown) {
@@ -226,7 +305,7 @@ export class CopaAccounts {
 					throw new AccountError(409, 'Nickname registrado ou reservado.');
 				if (Object.keys(value.accounts).length >= 1000)
 					throw new AccountError(503, 'Limite de contas atingido.');
-				value.accounts[user.id] = { name: user.name, password: encoded };
+				value.accounts[user.id] = { name: user.name, password: encoded, registeredAt: new Date(this.now()).toISOString() };
 				return this.issue(value, user.id);
 			}, true);
 		}
@@ -283,12 +362,12 @@ export class CopaAccounts {
 		return result;
 	}
 	async validSessions() { return (await this.read()).value; }
-	async admin(action: string, names: unknown) {
+	async admin(action: string, names: unknown, region?: unknown) {
 		if (action === 'list') {
 			const { value } = await this.read();
 			return { accounts: Object.entries(value.accounts).map(([id, account]) => ({
 				id, name: account.name,
-				registered: !!account.password, disabled: !!account.disabled,
+				registered: !!account.password, disabled: !!account.disabled, badges: account.badges || [],
 				sessions: Object.values(value.sessions)
 					.filter(session => session.id === id && session.expires > this.now()).length })) };
 		}
@@ -306,6 +385,13 @@ export class CopaAccounts {
 					if (account?.password)
 						throw new AccountError(409, 'Contas registradas são permanentes. Use desativar.');
 					delete value.accounts[user.id];
+				} else if (action === 'award-badge' || action === 'remove-badge') {
+					if (!isProfileRegion(region)) throw new AccountError(400, 'Selecione uma região.');
+					if (!account?.password) throw new AccountError(404, 'Conta registrada não encontrada.');
+					const badges = new Set(account.badges);
+					if (action === 'award-badge') badges.add(region);
+					else badges.delete(region);
+					account.badges = PROFILE_REGIONS.filter(item => badges.has(item));
 				} else if (action === 'disable' || action === 'enable') {
 					if (!account)
 						throw new AccountError(404, 'Conta não encontrada.');
@@ -407,11 +493,12 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 	}
 	// Decode UTF-8 across transport chunks before parsing password JSON.
 	req.setEncoding('utf8');
+	const bodyLimit = path === '/copa-rinha/accounts/edit-trainer' ? 10240 : 8192;
 	let body = '', oversized = false;
 	req.on('data', chunk => {
 		if (!oversized) {
 			body += chunk;
-			if (Buffer.byteLength(body) > 8192) {
+			if (Buffer.byteLength(body) > bodyLimit) {
 				oversized = true;
 				body = '';
 			}
@@ -434,13 +521,17 @@ export function handleAccountRequest(req: IncomingMessage, res: ServerResponse, 
 					const key = process.env.COPA_RINHA_ADMIN_KEY;
 					if (!key || key.length < 43 || !token || !timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(token))))
 						throw new AccountError(403, 'Acesso administrativo negado.');
-					result = await service.admin(data.action, data.names);
+					result = await service.admin(data.action, data.names, data.region);
 				} else if (action === 'grant')
 					result = await service.grant(token, data.challenge);
 				else if (action === 'profile') {
 					const { id } = nameOf(data.name);
 					const member = (await service.publicMembers()).find(entry => entry.id === id);
 					result = { member: member || null };
+				} else if (action === 'trainer') {
+					result = { trainer: await service.trainer(data.name) };
+				} else if (action === 'edit-trainer') {
+					result = await service.setTrainer(token, data.card);
 				} else if (action === 'partner')
 					result = await service.setPartner(token, data.partner);
 				else if (action === 'logout')

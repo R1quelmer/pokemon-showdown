@@ -19,6 +19,38 @@ function fixture() {
 const password = 'Copa fixture password 928';
 const challenge = '4|' + 'a'.repeat(256);
 describe('Copa private accounts', () => {
+	it('validates trainer cards, separates badge permissions and persists observed results', async () => {
+		const store = fixture();
+		const service = new CopaAccounts(store);
+		const { token } = await service.authenticate('register', 'Trainer Card', password);
+		const card = {
+			bio: 'Meu Dream Team', region: 'Hisui', banner: '',
+			dreamTeam: [{ species: 'greninjamega', shiny: true }, null, { species: 'rotomwash', shiny: false }, null, null, null],
+		};
+		await assert.rejects(service.setTrainer('x'.repeat(43), card), { status: 401 });
+		await assert.rejects(service.setTrainer(token, { ...card, dreamTeam: [{ species: 'sylveon', shiny: true }] }), { status: 400 });
+		await assert.rejects(service.setTrainer(token, { ...card, banner: 'data:image/svg+xml;base64,PHN2Zz4=' }), { status: 400 });
+		await assert.rejects(service.setTrainer(token, { ...card, region: 'Inexistente' }), { status: 400 });
+		await service.setTrainer(token, { ...card, badges: ['Kanto'], stats: { wins: 999 } });
+		await service.admin('award-badge', ['Trainer Card'], 'Hisui');
+		await service.admin('award-badge', ['Trainer Card'], 'Hisui');
+		await service.admin('award-badge', ['Trainer Card'], 'Paldea');
+		await service.admin('remove-badge', ['Trainer Card'], 'Paldea');
+		const players = [{ id: 'trainercard', account: 'trainercard' }, { id: 'opponent' }];
+		await service.recordTrainerBattle(players, 'trainercard');
+		await service.recordTrainerBattle(players, 'opponent');
+		await service.recordTrainerBattle(players, '');
+		const profile = await new CopaAccounts(store).trainer('trainercard');
+		assert.deepEqual(profile.card, card);
+		assert.deepEqual(profile.badges, ['Hisui']);
+		assert.deepEqual(profile.stats, { total: 3, wins: 1, losses: 1 });
+		assert.equal(typeof profile.registeredAt, 'string');
+		assert.equal(Object.hasOwn(profile, 'password'), false);
+		assert.equal((await service.publicMembers())[0].card, undefined);
+		await service.admin('disable', ['Trainer Card']);
+		assert.equal(await service.trainer('Trainer Card'), null);
+	});
+
 	it('lists active members, persists avatar choices and reuses the account cache for live presence', async () => {
 		const { crqHandlers } = require('../../dist/server/chat-plugins/copa-rinha-online');
 		const source = copaAccounts.source, copa = Config.copaRinhaSingleFormat;

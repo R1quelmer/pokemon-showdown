@@ -11,7 +11,8 @@
  * @license MIT
  */
 
-import { saveBattle } from './copa-replays';
+import { FORMAT as COPA_FORMAT, saveBattle } from './copa-replays';
+import { copaAccounts } from './copa-accounts';
 import { execSync } from "child_process";
 import { ProcessManager, type Streams } from '../lib';
 import { BattleStream } from "../sim/battle-stream";
@@ -547,6 +548,7 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 	requestCount = 0;
 	options: RoomBattleOptions;
 	readonly isTraining: boolean;
+	private copaTrainerAccounts?: (ID | undefined)[];
 	private trainingAI?: CopaTrainingAI;
 	private trainingFallback = false;
 	private trainingDisconnectTimer?: NodeJS.Timeout;
@@ -609,6 +611,11 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 					name: player.name, avatar: 'scientist', team: options.trainingTeam,
 				})}`);
 			}
+		}
+		if (Config.copaRinhaSingleFormat && this.format === COPA_FORMAT && !this.isTraining && !options.inputLog &&
+			options.players.length === 2 && options.players.every(player => player?.user?.named)) {
+			this.copaTrainerAccounts = options.players.map(({ user }) =>
+				user?.connections.some(connection => connection.hasCopaSession(user)) ? user.id : undefined);
 		}
 		if (options.inputLog) {
 			let scanIndex = 0;
@@ -898,6 +905,15 @@ export class RoomBattle extends RoomGame<RoomBattlePlayer> {
 		// Declare variables here in case we need them for non-rated battles logging.
 		let p1score = 0.5;
 		const winnerid = toID(winnerName);
+
+		if (this.copaTrainerAccounts) {
+			const accountIds = this.copaTrainerAccounts;
+			const players = this.players.map((player, i) => ({ id: toID(player.name), account: accountIds[i] }));
+			if (!winnerid || players.some(player => player.id === winnerid)) {
+				void copaAccounts.recordTrainerBattle(players, winnerid)
+					.catch(error => Monitor.crashlog(error, 'Copa trainer statistics'));
+			}
+		}
 
 		// Check if the battle was rated to update the ladder, return its response, and log the battle.
 		if (winnerid === this.p1.id) {
